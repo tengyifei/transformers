@@ -180,6 +180,7 @@ if is_datasets_available():
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
+    import torch_xla.debug.profiler as xp
     import torch_xla.debug.metrics as met
     from torch_xla import __version__ as XLA_VERSION
 
@@ -2167,6 +2168,12 @@ class Trainer:
                 rng_to_sync = True
 
             step = -1
+            server = xp.start_server(9012)
+            logger.info(f'Profiling server started: {str(server)}')
+            profile_step = int(os.environ.get('PROFILE_STEP', -1))
+            profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
+            profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
+            profile_logdir = os.environ.get('PROFILE_LOGDIR', None)
             for step, inputs in enumerate(epoch_iterator):
                 total_batched_samples += 1
 
@@ -2283,6 +2290,14 @@ class Trainer:
                     self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
+
+                if step == profile_step and epoch == profile_epoch:
+                    # Wait until device execution catches up to tracing before triggering the profile. This will
+                    # interrupt training slightly on the hosts which are capturing, but by waiting after tracing
+                    # for the step, the interruption will be minimal.
+                    xm.wait_device_ops()
+                    import tempfile
+                    xp.trace_detached('127.0.0.1:9012', profile_logdir or tempfile.mkdtemp(), profile_duration or 20000)
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     # PyTorch/XLA relies on the data loader to insert the mark_step for
