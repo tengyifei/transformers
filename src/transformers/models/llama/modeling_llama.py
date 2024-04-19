@@ -381,7 +381,7 @@ class LlamaAttention(nn.Module):
 
         # Integrated with PyTorch/XLA Pallas Flash Attention:
         from torch_xla.experimental.custom_kernel import flash_attention
-        attn_output = flash_attention(query_states, key_states, value_states, partition_spec=('fsdp', None, None, None))
+        attn_output = flash_attention(query_states, key_states, value_states, causal=True, partition_spec=('fsdp', None, None, None))
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
