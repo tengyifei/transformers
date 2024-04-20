@@ -450,6 +450,9 @@ def main():
         )
     else:
         model = AutoModelForCausalLM.from_config(config, trust_remote_code=model_args.trust_remote_code)
+        # Set the model dtype since we can no longer rely on USE_XLA_BF16.
+        if model_args.torch_dtype is not None:
+            model = model.to(getattr(torch, model_args.torch_dtype))
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
