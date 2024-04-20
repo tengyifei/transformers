@@ -156,6 +156,14 @@ class ModelArguments:
             )
         },
     )
+    flash_attention: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enable PyTorch/XLA Pallas Flash Attention"
+            )
+        },
+    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
@@ -430,6 +438,9 @@ def main():
             "You are instantiating a new tokenizer from scratch. This is not supported by this script. "
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
+
+    # Pass the flash attention toggle to the model config
+    config.flash_attention = model_args.flash_attention
 
     if model_args.model_name_or_path:
         torch_dtype = (
