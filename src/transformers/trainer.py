@@ -2140,6 +2140,12 @@ class Trainer:
                     _ = list(sampler)
 
         total_batched_samples = 0
+        server = xp.start_server(9012)
+        logger.info(f'Profiling server started: {str(server)}')
+        profile_step = int(os.environ.get('PROFILE_STEP', -1))
+        profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
+        profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
+        profile_logdir = os.environ.get('PROFILE_LOGDIR', None)
         for epoch in range(epochs_trained, num_train_epochs):
             epoch_iterator = train_dataloader
             if hasattr(epoch_iterator, "set_epoch"):
@@ -2168,12 +2174,6 @@ class Trainer:
                 rng_to_sync = True
 
             step = -1
-            server = xp.start_server(9012)
-            logger.info(f'Profiling server started: {str(server)}')
-            profile_step = int(os.environ.get('PROFILE_STEP', -1))
-            profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
-            profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
-            profile_logdir = os.environ.get('PROFILE_LOGDIR', None)
             for step, inputs in enumerate(epoch_iterator):
                 total_batched_samples += 1
 
