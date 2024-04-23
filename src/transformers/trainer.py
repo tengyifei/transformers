@@ -3231,6 +3231,9 @@ class Trainer:
         Will only save from the main process.
         """
 
+        if self.args.save_strategy == "no":
+            return
+
         if output_dir is None:
             output_dir = self.args.output_dir
 
