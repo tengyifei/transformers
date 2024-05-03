@@ -43,6 +43,7 @@ _CONFIG_FOR_DOC = "EsmConfig"
 
 from ..deprecated._archive_maps import ESM_PRETRAINED_MODEL_ARCHIVE_LIST  # noqa: F401, E402
 
+import torch_xla.debug.profiler as xp
 
 def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
@@ -138,6 +139,7 @@ class EsmContactPredictionHead(nn.Module):
         self.regression = nn.Linear(in_features, 1, bias)
         self.activation = nn.Sigmoid()
 
+    @xp.trace_me("EsmContactPredictionHead")
     def forward(self, tokens, attentions):
         # remove eos token attentions
         eos_mask = tokens.ne(self.eos_idx).to(attentions)
@@ -185,6 +187,7 @@ class EsmEmbeddings(nn.Module):
         self.token_dropout = config.token_dropout
         self.mask_token_id = config.mask_token_id
 
+    @xp.trace_me("EsmEmbeddings")
     def forward(
         self, input_ids=None, attention_mask=None, position_ids=None, inputs_embeds=None, past_key_values_length=0
     ):
@@ -283,6 +286,7 @@ class EsmSelfAttention(nn.Module):
         x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
 
+    @xp.trace_me("EsmSelfAttention")
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -392,6 +396,7 @@ class EsmSelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
+    @xp.trace_me("EsmSelfOutput")
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -425,6 +430,7 @@ class EsmAttention(nn.Module):
         self.self.all_head_size = self.self.attention_head_size * self.self.num_attention_heads
         self.pruned_heads = self.pruned_heads.union(heads)
 
+    @xp.trace_me("EsmAttention")
     def forward(
         self,
         hidden_states,
@@ -455,6 +461,7 @@ class EsmIntermediate(nn.Module):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
 
+    @xp.trace_me("EsmIntermediate")
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = gelu(hidden_states)
@@ -467,6 +474,7 @@ class EsmOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
+    @xp.trace_me("EsmOutput")
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -490,6 +498,7 @@ class EsmLayer(nn.Module):
         self.output = EsmOutput(config)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
+    @xp.trace_me("EsmLayer")
     def forward(
         self,
         hidden_states,
@@ -568,6 +577,7 @@ class EsmEncoder(nn.Module):
         self.emb_layer_norm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.gradient_checkpointing = False
 
+    @xp.trace_me("EsmEncoder")
     def forward(
         self,
         hidden_states,
@@ -664,6 +674,7 @@ class EsmPooler(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
 
+    @xp.trace_me("EsmPooler")
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
@@ -813,6 +824,7 @@ class EsmModel(EsmPreTrainedModel):
         output_type=BaseModelOutputWithPoolingAndCrossAttentions,
         config_class=_CONFIG_FOR_DOC,
     )
+    @xp.trace_me("EsmModel")
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -977,6 +989,7 @@ class EsmForMaskedLM(EsmPreTrainedModel):
         config_class=_CONFIG_FOR_DOC,
         mask="<mask>",
     )
+    @xp.trace_me("EsmForMaskedLM")
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1049,6 +1062,7 @@ class EsmLMHead(nn.Module):
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.bias = nn.Parameter(torch.zeros(config.vocab_size))
 
+    @xp.trace_me("EsmLMHead")
     def forward(self, features, **kwargs):
         x = self.dense(features)
         x = gelu(x)
@@ -1083,6 +1097,7 @@ class EsmForSequenceClassification(EsmPreTrainedModel):
         output_type=SequenceClassifierOutput,
         config_class=_CONFIG_FOR_DOC,
     )
+    @xp.trace_me("EsmForSequenceClassification")
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1177,6 +1192,7 @@ class EsmForTokenClassification(EsmPreTrainedModel):
         output_type=TokenClassifierOutput,
         config_class=_CONFIG_FOR_DOC,
     )
+    @xp.trace_me("EsmForTokenClassification")
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1239,6 +1255,7 @@ class EsmClassificationHead(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
 
+    @xp.trace_me("EsmClassificationHead")
     def forward(self, features, **kwargs):
         x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
         x = self.dropout(x)
