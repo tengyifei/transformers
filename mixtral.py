@@ -1,4 +1,8 @@
 import torch
+import torch_xla
+import torch_xla.core.xla_model as xm
+import torch_xla.debug.metrics as met
+
 from transformers import AutoTokenizer, AutoConfig, MixtralForCausalLM
 
 model_id = "mistralai/Mixtral-8x7B-v0.1"
@@ -14,8 +18,15 @@ config = AutoConfig.from_pretrained(
     num_local_experts=4,
 )
 print(config)
-model = MixtralForCausalLM(config)
+
+device = xm.xla_device()
+
+# This is a custom config to enable the static mode of expert computation.
+config.static=False
+model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {model.num_parameters()/2**20:.2f}M params")
 
-output = model(torch.randint(512, (2, 128)))
+output = model(torch.randint(512, (2, 128)).to(device))
+xm.mark_step()
 print(output.logits.shape)
+print(met.metrics_report())
