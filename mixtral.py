@@ -24,7 +24,7 @@ device = 'cpu'
 torch.manual_seed(42)
 
 # This is a custom config to enable the static mode of expert computation.
-config.static=False
+config.static=True
 model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {model.num_parameters()/2**20:.2f}M params")
 
