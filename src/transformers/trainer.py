@@ -1704,7 +1704,7 @@ class Trainer:
                         real_output = output
                     elif isinstance(output, tuple):
                         real_output = output[0]
-                    elif isinstance(output, CausalLMOutputWithPast):
+                    elif hasattr(output, "logits"):
                         real_output = output.logits
 
                     if real_output is None:
