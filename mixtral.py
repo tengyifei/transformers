@@ -26,6 +26,18 @@ torch.manual_seed(42)
 dynamic_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {dynamic_model.num_parameters()/2**20:.2f}M params")
 
+active_weight = 0
+for name, param in dynamic_model.named_parameters():
+    if not param.requires_grad:
+        continue
+    numel = param.numel()
+    print(f"{name}: {numel} params")
+    if 'block_sparse_moe.experts' in name:
+        active_weight += numel / config.num_local_experts * config.num_experts_per_tok
+    else:
+        active_weight += numel
+print(f"Active weight: {active_weight/2**20:.2f}M params")
+
 # This is a custom config to enable the static mode of expert computation.
 config.static=True
 torch.manual_seed(42)

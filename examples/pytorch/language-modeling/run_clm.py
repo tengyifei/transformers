@@ -476,6 +476,18 @@ def main():
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
+        active_weight = 0
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            numel = param.numel()
+            # print(f"{name}: {numel} params")
+            if 'block_sparse_moe.experts' in name:
+                active_weight += numel / config.num_local_experts * config.num_experts_per_tok
+            else:
+                active_weight += numel
+        logger.info(f"Active weight: {active_weight:,}")
+
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
