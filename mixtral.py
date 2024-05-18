@@ -44,5 +44,7 @@ for input_size in input_sizes:
 device = xm.xla_device()
 model = static_model.to(device)
 output = model(torch.randint(128, ((2, 128))).to(device))
+loss = torch.sum(output.logits)
+loss.backward()
 xm.mark_step()
 print(met.metrics_report())
