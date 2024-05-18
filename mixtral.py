@@ -19,14 +19,17 @@ config = AutoConfig.from_pretrained(
 )
 print(config)
 
-device = xm.xla_device()
+# device = xm.xla_device()
+device = 'cpu'
+torch.manual_seed(42)
 
 # This is a custom config to enable the static mode of expert computation.
 config.static=False
 model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {model.num_parameters()/2**20:.2f}M params")
 
-output = model(torch.randint(512, (2, 128)).to(device))
-xm.mark_step()
+output = model(torch.arange(8).view(1, 8).to(device))
+# xm.mark_step()
 print(output.logits.shape)
-print(met.metrics_report())
+print(output.logits)
+# print(met.metrics_report())
