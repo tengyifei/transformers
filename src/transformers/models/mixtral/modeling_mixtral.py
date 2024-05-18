@@ -856,8 +856,7 @@ class MixtralSparseMoeBlock(nn.Module):
         else:
             _, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
             mask = torch.ones_like(routing_weights, dtype=bool)
-            for i in range(mask.shape[0]):
-                mask[i, selected_experts[i]] = False
+            mask[torch.arange(mask.shape[0]).view(-1, 1), selected_experts] = False  # Partially thanks to Copilot!
             routing_weights.masked_fill_(mask, 0.0)
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
