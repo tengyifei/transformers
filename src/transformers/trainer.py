@@ -180,7 +180,6 @@ if is_datasets_available():
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
-    import torch_xla.debug.profiler as xp
     import torch_xla.debug.metrics as met
     from torch_xla import __version__ as XLA_VERSION
 
@@ -188,6 +187,10 @@ if is_torch_xla_available():
     if IS_XLA_FSDPV2_POST_2_2:
         import torch_xla.distributed.spmd as xs
         import torch_xla.runtime as xr
+
+    import torch_xla.debug.profiler as xp
+    server = xp.start_server(9012)
+    print(f'Profiling server started: {str(server)}')
 else:
     IS_XLA_FSDPV2_POST_2_2 = False
 
@@ -2140,8 +2143,6 @@ class Trainer:
                     _ = list(sampler)
 
         total_batched_samples = 0
-        server = xp.start_server(9012)
-        logger.info(f'Profiling server started: {str(server)}')
         profile_step = int(os.environ.get('PROFILE_STEP', -1))
         profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
         profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
