@@ -18,6 +18,7 @@ config = AutoConfig.from_pretrained(
     num_local_experts=4,
 )
 print(config)
+config.flash_attention = False
 
 device = 'cpu'
 
@@ -49,8 +50,10 @@ for input_size in input_sizes:
     input = torch.randint(128, ((2, input_size // 2))).to(device)
     static_output = static_model(input)
     print(static_output.logits.shape)
+    # print(static_output.logits)
     dynamic_output = dynamic_model(input)
     print(dynamic_output.logits.shape)
+    # print(dynamic_output.logits)
     assert torch.allclose(static_output.logits, dynamic_output.logits, atol=1e-6), "logits are not equal"
 
 device = xm.xla_device()

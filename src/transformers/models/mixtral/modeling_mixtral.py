@@ -863,13 +863,7 @@ class MixtralSparseMoeBlock(nn.Module):
         router_logits = self.gate(hidden_states)
 
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        if not self.static:
-            routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        else:
-            _, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-            mask = torch.ones_like(routing_weights, dtype=bool)
-            mask[torch.arange(mask.shape[0]).view(-1, 1), selected_experts] = False  # Partially thanks to Copilot!
-            routing_weights = routing_weights.masked_fill(mask, 0.0)
+        routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
@@ -899,7 +893,8 @@ class MixtralSparseMoeBlock(nn.Module):
                 # the `top_x` tensor here.
                 final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
             else:
-                current_hidden_states = expert_layer(hidden_states) * routing_weights[:, expert_idx, None]  # make routing_weights (n, 1) instead of (1, n).
+                routing_weights_idx = routing_weights.masked_fill(selected_experts != expert_idx, 0.0).sum(dim=-1, keepdim=True)
+                current_hidden_states = expert_layer(hidden_states) * routing_weights_idx
                 final_hidden_states += current_hidden_states.to(hidden_states.dtype)
 
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
