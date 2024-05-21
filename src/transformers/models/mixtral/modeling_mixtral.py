@@ -68,6 +68,7 @@ if is_torch_fx_available():
 
     _prepare_4d_causal_attention_mask = torch.fx.wrap(_prepare_4d_causal_attention_mask)
 
+import torch_xla.debug.profiler as xp
 
 logger = logging.get_logger(__name__)
 
@@ -173,6 +174,7 @@ class MixtralRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
 
+    @xp.trace_me("MixtralRMSNorm")
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
@@ -207,6 +209,7 @@ class MixtralRotaryEmbedding(nn.Module):
         self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
         self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
 
+    @xp.trace_me("MixtralRotaryEmbedding")
     def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len > self.max_seq_len_cached:
@@ -315,6 +318,7 @@ class MixtralAttention(nn.Module):
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
+    @xp.trace_me("MixtralAttention")
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -805,6 +809,7 @@ class MixtralBlockSparseTop2MLP(nn.Module):
 
         self.act_fn = ACT2FN[config.hidden_act]
 
+    @xp.trace_me("MixtralBlockSparseTop2MLP")
     def forward(self, hidden_states):
         current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
         current_hidden_states = self.w2(current_hidden_states)
@@ -847,6 +852,7 @@ class MixtralSparseMoeBlock(nn.Module):
         # Jitter parameters
         self.jitter_noise = config.router_jitter_noise
 
+    @xp.trace_me("MixtralSparseMoeBlock")
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -911,6 +917,7 @@ class MixtralDecoderLayer(nn.Module):
         self.input_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
+    @xp.trace_me("MixtralDecoderLayer")
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1126,6 +1133,7 @@ class MixtralModel(MixtralPreTrainedModel):
 
     # Ignore copy
     @add_start_docstrings_to_model_forward(MIXTRAL_INPUTS_DOCSTRING)
+    @xp.trace_me("MixtralModel")
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1324,6 +1332,7 @@ class MixtralForCausalLM(MixtralPreTrainedModel):
     @add_start_docstrings_to_model_forward(MIXTRAL_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=MoeCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     # Ignore copy
+    @xp.trace_me("MixtralForCausalLM")
     def forward(
         self,
         input_ids: torch.LongTensor = None,
