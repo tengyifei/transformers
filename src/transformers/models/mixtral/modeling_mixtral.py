@@ -894,7 +894,7 @@ class MixtralSparseMoeBlock(nn.Module):
                 final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
             else:
                 routing_weights_idx = routing_weights.masked_fill(selected_experts != expert_idx, 0.0).sum(dim=-1, keepdim=True)
-                current_hidden_states = expert_layer(hidden_states) * routing_weights_idx
+                current_hidden_states = expert_layer(hidden_states) * routing_weights_idx  # We can't mask the input as there is non-linearities in the expert layer.
                 final_hidden_states += current_hidden_states.to(hidden_states.dtype)
 
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
