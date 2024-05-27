@@ -172,6 +172,14 @@ class ModelArguments:
             )
         },
     )
+    gmm: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enable Mixtral's gmm implementation"
+            )
+        },
+    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
@@ -450,6 +458,8 @@ def main():
     # Pass the custom configs to the model config
     config.flash_attention = model_args.flash_attention
     config.static = model_args.static
+    config.gmm = model_args.gmm
+    assert config.static and config.gmm == False, "Mixtral's MoE can't be both static and gmm at the same time"
 
     if model_args.model_name_or_path:
         torch_dtype = (
