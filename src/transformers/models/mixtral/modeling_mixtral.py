@@ -843,6 +843,7 @@ class MixtralSparseMoeBlock(nn.Module):
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
         self.static = config.static
+        self.gmm = config.gmm
 
         # gating
         self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
@@ -851,6 +852,65 @@ class MixtralSparseMoeBlock(nn.Module):
 
         # Jitter parameters
         self.jitter_noise = config.router_jitter_noise
+
+    def _eager_gmm(
+        self,
+        lhs: torch.Tensor,
+        rhs: torch.Tensor,
+        group_sizes: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        For testing purpose.
+        """
+        start = 0
+        out = []
+        for i, size in enumerate(group_sizes):
+            result = lhs[start:start + size, :] @ rhs[i, :, :]
+            out.append(result)
+            start += group_sizes[i]
+        return torch.cat(out)
+
+    @xp.trace_me("_gmm")
+    def _gmm(self, hidden_states: torch.Tensor, top_ks: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor) -> torch.Tensor:
+        """
+        Integrated with PyTorch/XLA Pallas gmm:
+
+        lhs: [m, hidden_size]
+        top_ks: [m, k]
+        w1: [num_experts, hidden_size, ffn_dim]
+        w2: [num_experts, ffn_dim, hidden_size]
+        w3: [num_experts, hidden_size, ffn_dim]
+        """
+        from torch_xla.experimental.custom_kernel import gmm, _histogram
+
+        device = hidden_states.device
+        if device == torch.device('cpu'):
+            gmm = self._eager_gmm
+        m, k = hidden_states.shape[0], top_ks.shape[1]
+
+        # We want to create one big batch of tokens that has all top-k choices in it.
+        # Our tokens will thus be duplicated k-times in the batch. To do this we,
+        # first flatten the expert choices list and argsort it. This gives us an array
+        # of length B * K. We then create a tiled arange of size B * K and index
+        # into the expert choices list. This will give us the set of indices we need
+        # to gather from the xs to create this big batch.
+        top_flat = top_ks.flatten()
+        hidden_states_order = top_flat.argsort()
+        hidden_states_reverse_order = hidden_states_order.argsort()
+        # Always replicated, so okay to skip manual sharding.
+        hidden_states_indices = torch.arange(m, device=device).repeat_interleave(k)[hidden_states_order]
+        current_hidden_states = hidden_states[hidden_states_indices]
+
+        group_sizes = _histogram(top_flat.to(torch.int32), 0, self.num_experts - 1)
+
+        # Replicated MixtralBlockSparseTop2MLP.forward
+        # Here we just use silu and ignore the configuration given we need to manually write the backward pass.
+        current_hidden_states = F.silu(gmm(current_hidden_states, w1, group_sizes)) * gmm(current_hidden_states, w3, group_sizes)
+        current_hidden_states = gmm(current_hidden_states, w2, group_sizes)
+
+        current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(m, k, self.hidden_dim)
+        return current_hidden_states
+
 
     @xp.trace_me("MixtralSparseMoeBlock")
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -868,34 +928,42 @@ class MixtralSparseMoeBlock(nn.Module):
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
 
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
-        )
+        if not self.gmm:
+            final_hidden_states = torch.zeros(
+                (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+            )
 
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be sollicitated
-        if not self.static:
-            expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        # Loop over all available experts in the model and perform the computation on each expert
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.experts[expert_idx]
+            # One hot encode the selected experts to create an expert mask
+            # this will be used to easily index which expert is going to be sollicitated
             if not self.static:
-                idx, top_x = torch.where(expert_mask[expert_idx])
+                expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
-                # Index the correct hidden states and compute the expert hidden state for
-                # the current expert. We need to make sure to multiply the output hidden
-                # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-                current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)  # why not current_state = hidden_states[top_x]?
-                current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+            # Loop over all available experts in the model and perform the computation on each expert
+            for expert_idx in range(self.num_experts):
+                expert_layer = self.experts[expert_idx]
+                if not self.static:
+                    idx, top_x = torch.where(expert_mask[expert_idx])
 
-                # However `index_add_` only support torch tensors for indexing so we'll use
-                # the `top_x` tensor here.
-                final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-            else:
-                routing_weights_idx = routing_weights.masked_fill(selected_experts != expert_idx, 0.0).sum(dim=-1, keepdim=True)
-                current_hidden_states = expert_layer(hidden_states) * routing_weights_idx  # We can't mask the input as there is non-linearities in the expert layer.
-                final_hidden_states += current_hidden_states.to(hidden_states.dtype)
+                    # Index the correct hidden states and compute the expert hidden state for
+                    # the current expert. We need to make sure to multiply the output hidden
+                    # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+                    current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)  # why not current_state = hidden_states[top_x]?
+                    current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+
+                    # However `index_add_` only support torch tensors for indexing so we'll use
+                    # the `top_x` tensor here.
+                    final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+                else:
+                    routing_weights_idx = routing_weights.masked_fill(selected_experts != expert_idx, 0.0).sum(dim=-1, keepdim=True)
+                    current_hidden_states = expert_layer(hidden_states) * routing_weights_idx  # We can't mask the input as there is non-linearities in the expert layer.
+                    final_hidden_states += current_hidden_states.to(hidden_states.dtype)
+        else:
+            w1 = torch.stack([expert.w1.weight.t() for expert in self.experts])
+            w2 = torch.stack([expert.w2.weight.t() for expert in self.experts])
+            w3 = torch.stack([expert.w3.weight.t() for expert in self.experts])
+
+            final_hidden_states = self._gmm(hidden_states, selected_experts, w1, w2, w3)
+            final_hidden_states = (final_hidden_states * routing_weights[..., None]).sum(dim=1)
 
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
         return final_hidden_states, router_logits

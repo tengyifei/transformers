@@ -23,6 +23,7 @@ config.flash_attention = False
 device = 'cpu'
 
 config.static=False
+config.gmm=False
 torch.manual_seed(42)
 dynamic_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {dynamic_model.num_parameters()/2**20:.2f}M params")
@@ -39,8 +40,9 @@ for name, param in dynamic_model.named_parameters():
         active_weight += numel
 print(f"Active weight: {active_weight/2**20:.2f}M params")
 
-# This is a custom config to enable the static mode of expert computation.
-config.static=True
+# This is a custom config to enable the static/gmm mode of expert computation.
+# config.static=True
+config.gmm=True
 torch.manual_seed(42)
 static_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {static_model.num_parameters()/2**20:.2f}M params")
@@ -60,6 +62,6 @@ device = xm.xla_device()
 model = static_model.to(device)
 output = model(torch.randint(128, ((2, 128))).to(device))
 loss = torch.sum(output.logits)
-loss.backward()
+# loss.backward()
 xm.mark_step()
 print(met.metrics_report())
