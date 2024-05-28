@@ -165,7 +165,7 @@ class ModelArguments:
         },
     )
     static: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": (
                 "Make Mixtral's MoE static"
@@ -459,7 +459,7 @@ def main():
     config.flash_attention = model_args.flash_attention
     config.static = model_args.static
     config.gmm = model_args.gmm
-    assert config.static and config.gmm == False, "Mixtral's MoE can't be both static and gmm at the same time"
+    assert (config.static and config.gmm) == False, "Mixtral's MoE can't be both static and gmm at the same time"
 
     if model_args.model_name_or_path:
         torch_dtype = (

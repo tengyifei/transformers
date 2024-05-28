@@ -881,12 +881,21 @@ class MixtralSparseMoeBlock(nn.Module):
         w2: [num_experts, ffn_dim, hidden_size]
         w3: [num_experts, hidden_size, ffn_dim]
         """
+        import torch_xla.distributed.spmd as xs
         from torch_xla.experimental.custom_kernel import gmm, _histogram
 
         device = hidden_states.device
         if device == torch.device('cpu'):
             gmm = self._eager_gmm
+        # m is global shape
         m, k = hidden_states.shape[0], top_ks.shape[1]
+
+        # Enter manual sharding zone
+        hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
+        top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
+        w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
+        w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
+        w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
 
         # We want to create one big batch of tokens that has all top-k choices in it.
         # Our tokens will thus be duplicated k-times in the batch. To do this we,
@@ -898,7 +907,7 @@ class MixtralSparseMoeBlock(nn.Module):
         hidden_states_order = top_flat.argsort()
         hidden_states_reverse_order = hidden_states_order.argsort()
         # Always replicated, so okay to skip manual sharding.
-        hidden_states_indices = torch.arange(m, device=device).repeat_interleave(k)[hidden_states_order]
+        hidden_states_indices = torch.arange(hidden_states.shape[0], device=device).repeat_interleave(k)[hidden_states_order]
         current_hidden_states = hidden_states[hidden_states_indices]
 
         group_sizes = _histogram(top_flat.to(torch.int32), 0, self.num_experts - 1)
@@ -908,7 +917,10 @@ class MixtralSparseMoeBlock(nn.Module):
         current_hidden_states = F.silu(gmm(current_hidden_states, w1, group_sizes)) * gmm(current_hidden_states, w3, group_sizes)
         current_hidden_states = gmm(current_hidden_states, w2, group_sizes)
 
-        current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(m, k, self.hidden_dim)
+        current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(-1, k, self.hidden_dim)
+
+        # Exit manual sharding zone
+        current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, self.hidden_dim)).global_tensor
         return current_hidden_states
 
 
