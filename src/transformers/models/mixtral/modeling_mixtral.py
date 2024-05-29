@@ -890,6 +890,10 @@ class MixtralGmmTop2MLP(nn.Module):
         if xs.get_global_mesh() is not None:
             hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
             top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
+            # Create a new node to keep the original sharding spec.
+            w1 = w1 + 0
+            w2 = w2 + 0
+            w3 = w3 + 0
             w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
             w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
             w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
