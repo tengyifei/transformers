@@ -69,6 +69,8 @@ if is_torch_fx_available():
     _prepare_4d_causal_attention_mask = torch.fx.wrap(_prepare_4d_causal_attention_mask)
 
 import torch_xla.debug.profiler as xp
+import torch_xla.distributed.spmd as xs
+
 
 logger = logging.get_logger(__name__)
 
@@ -876,8 +878,7 @@ class MixtralGmmTop2MLP(nn.Module):
         w2: [num_experts, ffn_dim, hidden_size]
         w3: [num_experts, hidden_size, ffn_dim]
         """
-        import torch_xla.distributed.spmd as xs
-        from torch_xla.experimental.custom_kernel import gmm, _histogram
+        from torch_xla.experimental.custom_kernel import _histogram, gmm
 
         device = hidden_states.device
         if device == torch.device('cpu'):
