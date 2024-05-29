@@ -27,7 +27,7 @@ import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, init
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache
@@ -388,7 +388,9 @@ class MixtralAttention(nn.Module):
             # Integrated with PyTorch/XLA Pallas Flash Attention:
             from torch_xla.experimental.custom_kernel import flash_attention
             query_states /= math.sqrt(self.head_dim)
-            attn_output = flash_attention(query_states, key_states, value_states, causal=True, partition_spec=('fsdp', None, None, None))
+            if xs.get_global_mesh() is not None:
+                partition_spec=('fsdp', None, None, None)
+            attn_output = flash_attention(query_states, key_states, value_states, causal=True, partition_spec=partition_spec)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -824,34 +826,27 @@ class MixtralBLockSparseTop2MLP(MixtralBlockSparseTop2MLP):
         super().__init__(*args, **kwargs)
 
 
-class MixtralSparseMoeBlock(nn.Module):
-    """
-    This implementation is
-    strictly equivalent to standard MoE with full capacity (no
-    dropped tokens). It's faster since it formulates MoE operations
-    in terms of block-sparse operations to accomodate imbalanced
-    assignments of tokens to experts, whereas standard MoE either
-    (1) drop tokens at the cost of reduced performance or (2) set
-    capacity factor to number of experts and thus waste computation
-    and memory on padding.
-    """
-
-    def __init__(self, config):
+class MixtralGmmTop2MLP(nn.Module):
+    def __init__(self, config: MixtralConfig):
         super().__init__()
-        self.hidden_dim = config.hidden_size
         self.ffn_dim = config.intermediate_size
+        self.hidden_dim = config.hidden_size
         self.num_experts = config.num_local_experts
-        self.top_k = config.num_experts_per_tok
-        self.static = config.static
-        self.gmm = config.gmm
 
-        # gating
-        self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
+        self.w1 = nn.Parameter(torch.empty(self.num_experts, self.hidden_dim, self.ffn_dim))
+        self.w2 = nn.Parameter(torch.empty(self.num_experts, self.ffn_dim, self.hidden_dim))
+        self.w3 = nn.Parameter(torch.empty(self.num_experts, self.hidden_dim, self.ffn_dim))
 
-        self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
+        self.reset_parameters()
 
-        # Jitter parameters
-        self.jitter_noise = config.router_jitter_noise
+    # The followings are copied from https://github.com/pytorch/pytorch/blob/main/torch/nn/modules/linear.py#L49
+    def reset_parameters(self) -> None:
+        # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
+        # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
+        # https://github.com/pytorch/pytorch/issues/57109
+        init.kaiming_uniform_(self.w1, a=math.sqrt(5))
+        init.kaiming_uniform_(self.w2, a=math.sqrt(5))
+        init.kaiming_uniform_(self.w3, a=math.sqrt(5))
 
     def _eager_gmm(
         self,
@@ -891,11 +886,12 @@ class MixtralSparseMoeBlock(nn.Module):
         m, k = hidden_states.shape[0], top_ks.shape[1]
 
         # Enter manual sharding zone
-        hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
-        top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
-        w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
-        w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
-        w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
+        if xs.get_global_mesh() is not None:
+            hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
+            top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
+            w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
+            w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
+            w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
 
         # We want to create one big batch of tokens that has all top-k choices in it.
         # Our tokens will thus be duplicated k-times in the batch. To do this we,
@@ -920,9 +916,47 @@ class MixtralSparseMoeBlock(nn.Module):
         current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(-1, k, self.hidden_dim)
 
         # Exit manual sharding zone
-        current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, self.hidden_dim)).global_tensor
+        if xs.get_global_mesh() is not None:
+            current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, self.hidden_dim)).global_tensor
         return current_hidden_states
 
+
+    @xp.trace_me("MixtralGmmTop2MLP")
+    def forward(self, hidden_states, top_ks):
+        return self._gmm(hidden_states, top_ks, self.w1, self.w2, self.w3)
+
+
+class MixtralSparseMoeBlock(nn.Module):
+    """
+    This implementation is
+    strictly equivalent to standard MoE with full capacity (no
+    dropped tokens). It's faster since it formulates MoE operations
+    in terms of block-sparse operations to accomodate imbalanced
+    assignments of tokens to experts, whereas standard MoE either
+    (1) drop tokens at the cost of reduced performance or (2) set
+    capacity factor to number of experts and thus waste computation
+    and memory on padding.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.hidden_dim = config.hidden_size
+        self.ffn_dim = config.intermediate_size
+        self.num_experts = config.num_local_experts
+        self.top_k = config.num_experts_per_tok
+        self.static = config.static
+        self.gmm = config.gmm
+
+        # gating
+        self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
+
+        if not self.gmm:
+            self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
+        else:
+            self.experts = MixtralGmmTop2MLP(config)
+
+        # Jitter parameters
+        self.jitter_noise = config.router_jitter_noise
 
     @xp.trace_me("MixtralSparseMoeBlock")
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -970,11 +1004,7 @@ class MixtralSparseMoeBlock(nn.Module):
                     current_hidden_states = expert_layer(hidden_states) * routing_weights_idx  # We can't mask the input as there is non-linearities in the expert layer.
                     final_hidden_states += current_hidden_states.to(hidden_states.dtype)
         else:
-            w1 = torch.stack([expert.w1.weight.t() for expert in self.experts])
-            w2 = torch.stack([expert.w2.weight.t() for expert in self.experts])
-            w3 = torch.stack([expert.w3.weight.t() for expert in self.experts])
-
-            final_hidden_states = self._gmm(hidden_states, selected_experts, w1, w2, w3)
+            final_hidden_states = self.experts(hidden_states, selected_experts)
             final_hidden_states = (final_hidden_states * routing_weights[..., None]).sum(dim=1)
 
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)

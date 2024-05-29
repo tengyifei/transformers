@@ -23,7 +23,7 @@ config.flash_attention = False
 device = 'cpu'
 
 config.static=False
-config.gmm=False
+config.gmm=True  # for cpu, it will use eager gmm.
 torch.manual_seed(42)
 dynamic_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {dynamic_model.num_parameters()/2**20:.2f}M params")
@@ -42,7 +42,6 @@ print(f"Active weight: {active_weight/2**20:.2f}M params")
 
 # This is a custom config to enable the static/gmm mode of expert computation.
 # config.static=True
-config.gmm=True
 torch.manual_seed(42)
 static_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {static_model.num_parameters()/2**20:.2f}M params")
