@@ -161,17 +161,36 @@ for test in tests:
     assert torch.allclose(w2.grad, w2.grad.cpu())
     assert torch.allclose(w3.grad, w3.grad.cpu())
 
+# Grads are bastards to compare, set the precisou to 1e-4.
+def compare_tensors(t1, t2):
+    result = torch.allclose(t1, t2, atol=1e-4)
+    if result:
+        return True
+    else:
+        diff = torch.abs(t1 - t2)
+        print(f"Max diff: {diff.max()}")
+        return False
 
-# input_sizes = [8, 128, 256, 512, 1024]
-# for input_size in input_sizes:
-#     input = torch.randint(128, ((2, input_size // 2))).to(device)
-#     static_output = static_model(input)
-#     print(static_output.logits.shape)
-#     # print(static_output.logits)
-#     dynamic_output = dynamic_model(input)
-#     print(dynamic_output.logits.shape)
-#     # print(dynamic_output.logits)
-#     assert torch.allclose(static_output.logits, dynamic_output.logits, atol=1e-6), "logits are not equal"
+# Grads are bastards to compare, use smaller batch sizes.
+input_sizes = [8, 128, 256]
+for input_size in input_sizes:
+    input = torch.randint(128, ((2, input_size // 2))).to(device)
+    static_output = static_model(input)
+    print(static_output.logits.shape)
+    # print(static_output.logits)
+    dynamic_output = dynamic_model(input)
+    print(dynamic_output.logits.shape)
+    # print(dynamic_output.logits)
+    assert torch.allclose(static_output.logits, dynamic_output.logits, atol=1e-6), "logits are not equal"
+
+    static_output.logits.sum().backward()
+    dynamic_output.logits.sum().backward()
+
+    assert compare_tensors(static_model.lm_head.weight.grad, dynamic_model.lm_head.weight.grad)
+    assert compare_tensors(static_model.model.layers[0].block_sparse_moe.experts[0].w1.weight.grad, dynamic_model.model.layers[0].block_sparse_moe.experts[0].w1.weight.grad)
+    assert compare_tensors(static_model.model.layers[0].block_sparse_moe.experts[0].w2.weight.grad, dynamic_model.model.layers[0].block_sparse_moe.experts[0].w2.weight.grad)
+    assert compare_tensors(static_model.model.layers[0].block_sparse_moe.experts[0].w3.weight.grad, dynamic_model.model.layers[0].block_sparse_moe.experts[0].w3.weight.grad)
+
 
 
 # device = xm.xla_device()

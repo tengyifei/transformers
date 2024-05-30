@@ -1057,7 +1057,7 @@ class MixtralSparseMoeBlock(nn.Module):
         # gating
         self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
 
-        if not self.gmm:
+        if not self.gmm or self.gmm_stack:
             self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
         else:
             self.experts = MixtralGmmTop2MLP(config)
@@ -1081,7 +1081,7 @@ class MixtralSparseMoeBlock(nn.Module):
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
 
-        if not self.gmm:
+        if not self.gmm or self.gmm_stack:
             final_hidden_states = torch.zeros(
                 (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
             )
@@ -1091,25 +1091,27 @@ class MixtralSparseMoeBlock(nn.Module):
             if not self.static:
                 expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
-            # Loop over all available experts in the model and perform the computation on each expert
-            for expert_idx in range(self.num_experts):
-                expert_layer = self.experts[expert_idx]
-                if not self.static:
-                    idx, top_x = torch.where(expert_mask[expert_idx])
+                # Loop over all available experts in the model and perform the computation on each expert
+                for expert_idx in range(self.num_experts):
+                    expert_layer = self.experts[expert_idx]
+                    if not self.static:
+                        idx, top_x = torch.where(expert_mask[expert_idx])
 
-                    # Index the correct hidden states and compute the expert hidden state for
-                    # the current expert. We need to make sure to multiply the output hidden
-                    # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-                    current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)  # why not current_state = hidden_states[top_x]?
-                    current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+                        # Index the correct hidden states and compute the expert hidden state for
+                        # the current expert. We need to make sure to multiply the output hidden
+                        # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+                        current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)  # why not current_state = hidden_states[top_x]?
+                        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
 
-                    # However `index_add_` only support torch tensors for indexing so we'll use
-                    # the `top_x` tensor here.
-                    final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
-                else:
-                    routing_weights_idx = routing_weights.masked_fill(selected_experts != expert_idx, 0.0).sum(dim=-1, keepdim=True)
-                    current_hidden_states = expert_layer(hidden_states) * routing_weights_idx  # We can't mask the input as there is non-linearities in the expert layer.
-                    final_hidden_states += current_hidden_states.to(hidden_states.dtype)
+                        # However `index_add_` only support torch tensors for indexing so we'll use
+                        # the `top_x` tensor here.
+                        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+                    else:
+                        routing_weights_idx = routing_weights.masked_fill(selected_experts != expert_idx, 0.0).sum(dim=-1, keepdim=True)
+                        current_hidden_states = expert_layer(hidden_states) * routing_weights_idx  # We can't mask the input as there is non-linearities in the expert layer.
+                        final_hidden_states += current_hidden_states.to(hidden_states.dtype)
+
+
         else:
             final_hidden_states = self.experts(hidden_states, selected_experts)
             final_hidden_states = (final_hidden_states * routing_weights[..., None]).sum(dim=1)
