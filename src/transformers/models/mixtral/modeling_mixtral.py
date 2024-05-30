@@ -828,6 +828,103 @@ class MixtralBLockSparseTop2MLP(MixtralBlockSparseTop2MLP):
         super().__init__(*args, **kwargs)
 
 
+class Gmm(torch.autograd.Function):
+    @staticmethod
+    def _eager_gmm(
+        lhs: torch.Tensor,
+        rhs: torch.Tensor,
+        group_sizes: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        For testing purpose.
+        """
+        start = 0
+        out = []
+        for i, size in enumerate(group_sizes):
+            result = lhs[start:start + size, :] @ rhs[i, :, :]
+            out.append(result)
+            start += group_sizes[i]
+        return torch.cat(out)
+
+
+    @staticmethod
+    @xp.trace_me("gmm_forward")
+    def forward(ctx, hidden_states: torch.Tensor, top_ks: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor) -> torch.Tensor:
+        """
+        Integrated with PyTorch/XLA Pallas gmm:
+
+        lhs: [m, hidden_size]
+        top_ks: [m, k]
+        w1: [num_experts, hidden_size, ffn_dim]
+        w2: [num_experts, ffn_dim, hidden_size]
+        w3: [num_experts, hidden_size, ffn_dim]
+        """
+        from torch_xla.experimental.custom_kernel import _histogram, gmm
+
+        # Create a new node to keep the original sharding spec.
+        w1 = w1 + 0
+        w2 = w2 + 0
+        w3 = w3 + 0
+
+        # Save for backward
+        ctx.save_for_backward(hidden_states, w1, w2, w3)
+
+        device = hidden_states.device
+        if device == torch.device('cpu'):
+            gmm = Gmm._eager_gmm
+        # m is global shape
+        m, k, n, num_experts = hidden_states.shape[0], top_ks.shape[1], hidden_states.shape[-1], w1.shape[0]
+
+        # Enter manual sharding zone
+        if xs.get_global_mesh() is not None:
+            hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
+            top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
+            w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
+            w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
+            w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
+
+        # We want to create one big batch of tokens that has all top-k choices in it.
+        # Our tokens will thus be duplicated k-times in the batch. To do this we,
+        # first flatten the expert choices list and argsort it. This gives us an array
+        # of length B * K. We then create a tiled arange of size B * K and index
+        # into the expert choices list. This will give us the set of indices we need
+        # to gather from the xs to create this big batch.
+        top_flat = top_ks.flatten()
+        hidden_states_order = top_flat.argsort()
+        hidden_states_reverse_order = hidden_states_order.argsort()
+        # Always replicated, so okay to skip manual sharding.
+        hidden_states_indices = torch.arange(hidden_states.shape[0], device=device).repeat_interleave(k)[hidden_states_order]
+        current_hidden_states = hidden_states[hidden_states_indices]
+
+        group_sizes = _histogram(top_flat.to(torch.int32), 0, num_experts - 1)
+
+        # Replicated MixtralBlockSparseTop2MLP.forward
+        # Here we just use silu and ignore the configuration given we need to manually write the backward pass.
+        current_hidden_states = F.silu(gmm(current_hidden_states, w1, group_sizes)) * gmm(current_hidden_states, w3, group_sizes)
+        current_hidden_states = gmm(current_hidden_states, w2, group_sizes)
+
+        current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(-1, k, n)
+
+        # Exit manual sharding zone
+        if xs.get_global_mesh() is not None:
+            current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, n)).global_tensor
+
+        # Save for backward
+        ctx.hidden_states_indices = hidden_states_indices
+        ctx.hidden_states_reverse_order = hidden_states_reverse_order
+        ctx.group_sizes = group_sizes
+
+        return current_hidden_states
+
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        lhs, rhs, group_sizes = ctx.saved_tensors
+        grad_lhs = torch.cat([grad_output[i] @ rhs[i].t() for i in range(len(group_sizes))])
+        grad_rhs = torch.cat([lhs[i].t() @ grad_output[i] for i in range(len(group_sizes))])
+        return grad_lhs, grad_rhs, None
+
+
 class MixtralGmmTop2MLP(nn.Module):
     def __init__(self, config: MixtralConfig):
         super().__init__()
@@ -850,85 +947,9 @@ class MixtralGmmTop2MLP(nn.Module):
         init.kaiming_uniform_(self.w2, a=math.sqrt(5))
         init.kaiming_uniform_(self.w3, a=math.sqrt(5))
 
-    def _eager_gmm(
-        self,
-        lhs: torch.Tensor,
-        rhs: torch.Tensor,
-        group_sizes: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        For testing purpose.
-        """
-        start = 0
-        out = []
-        for i, size in enumerate(group_sizes):
-            result = lhs[start:start + size, :] @ rhs[i, :, :]
-            out.append(result)
-            start += group_sizes[i]
-        return torch.cat(out)
-
-    @xp.trace_me("_gmm")
-    def _gmm(self, hidden_states: torch.Tensor, top_ks: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor) -> torch.Tensor:
-        """
-        Integrated with PyTorch/XLA Pallas gmm:
-
-        lhs: [m, hidden_size]
-        top_ks: [m, k]
-        w1: [num_experts, hidden_size, ffn_dim]
-        w2: [num_experts, ffn_dim, hidden_size]
-        w3: [num_experts, hidden_size, ffn_dim]
-        """
-        from torch_xla.experimental.custom_kernel import _histogram, gmm
-
-        device = hidden_states.device
-        if device == torch.device('cpu'):
-            gmm = self._eager_gmm
-        # m is global shape
-        m, k = hidden_states.shape[0], top_ks.shape[1]
-
-        # Enter manual sharding zone
-        if xs.get_global_mesh() is not None:
-            hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
-            top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
-            # Create a new node to keep the original sharding spec.
-            w1 = w1 + 0
-            w2 = w2 + 0
-            w3 = w3 + 0
-            w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
-            w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
-            w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
-
-        # We want to create one big batch of tokens that has all top-k choices in it.
-        # Our tokens will thus be duplicated k-times in the batch. To do this we,
-        # first flatten the expert choices list and argsort it. This gives us an array
-        # of length B * K. We then create a tiled arange of size B * K and index
-        # into the expert choices list. This will give us the set of indices we need
-        # to gather from the xs to create this big batch.
-        top_flat = top_ks.flatten()
-        hidden_states_order = top_flat.argsort()
-        hidden_states_reverse_order = hidden_states_order.argsort()
-        # Always replicated, so okay to skip manual sharding.
-        hidden_states_indices = torch.arange(hidden_states.shape[0], device=device).repeat_interleave(k)[hidden_states_order]
-        current_hidden_states = hidden_states[hidden_states_indices]
-
-        group_sizes = _histogram(top_flat.to(torch.int32), 0, self.num_experts - 1)
-
-        # Replicated MixtralBlockSparseTop2MLP.forward
-        # Here we just use silu and ignore the configuration given we need to manually write the backward pass.
-        current_hidden_states = F.silu(gmm(current_hidden_states, w1, group_sizes)) * gmm(current_hidden_states, w3, group_sizes)
-        current_hidden_states = gmm(current_hidden_states, w2, group_sizes)
-
-        current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(-1, k, self.hidden_dim)
-
-        # Exit manual sharding zone
-        if xs.get_global_mesh() is not None:
-            current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, self.hidden_dim)).global_tensor
-        return current_hidden_states
-
-
     @xp.trace_me("MixtralGmmTop2MLP")
     def forward(self, hidden_states, top_ks):
-        return self._gmm(hidden_states, top_ks, self.w1, self.w2, self.w3)
+        return Gmm.apply(hidden_states, top_ks, self.w1, self.w2, self.w3)
 
 
 class MixtralSparseMoeBlock(nn.Module):
