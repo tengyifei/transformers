@@ -948,6 +948,8 @@ class Gmm(torch.autograd.Function):
     def backward(ctx, grad_output):
         from torch_xla.experimental.custom_kernel import _histogram, gmm_backward
 
+        # print("gmm_backward")
+
         device = grad_output.device
         if device == torch.device('cpu'):
             gmm_backward = Gmm._eager_gmm_backward
@@ -978,6 +980,7 @@ class Gmm(torch.autograd.Function):
             grad_output = xs.enable_manual_sharding(grad_output, (0, None, None)).global_tensor
 
         grad_output = grad_output.reshape(-1, n)[hidden_states_indices]
+        # print(grad_output.shape, sgmm.shape, w2.shape)
         grad_output, grad_w2 = gmm_backward(grad_output, sgmm, w2, group_sizes)
 
         # print(grad_output.shape, gmm3.shape)

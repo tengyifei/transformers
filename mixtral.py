@@ -127,7 +127,7 @@ for test in tests:
     m = test['m']
     n = test['n']
     lhs_dtype = rhs_dtype = torch.bfloat16
-    print(f"Running test with m={m}, k={k}, n={n}, num_groups={num_groups}")
+    print(f"Running another test with m={m}, k={k}, n={n}, num_groups={num_groups}")
 
 
     # Create TopK
@@ -138,26 +138,28 @@ for test in tests:
     lhs = torch.rand(m, k, dtype=lhs_dtype, requires_grad=True)
     w1 = torch.rand(num_groups, k, n, dtype=rhs_dtype, requires_grad=True)
     w3 = torch.rand(num_groups, k, n, dtype=rhs_dtype, requires_grad=True)
-    w2 = torch.rand(num_groups, k, n * 4, dtype=rhs_dtype, requires_grad=True)
+    w2 = torch.rand(num_groups, n, k, dtype=rhs_dtype, requires_grad=True)
     lhs.retain_grad()
     w1.retain_grad()
     w2.retain_grad()
     w3.retain_grad()
 
-    context = object()
+    class Empty:
+        pass
+    context = Empty()
     context.save_for_backward = lambda *args: args
-    ref_out = Gmm.forward(context, lhs, rhs, group_sizes)
+    ref_out = Gmm.forward(context, lhs, top, w1, w2, w3)
     ref_out.sum().backward()
+    grad_lhs, grad_w1, grad_w2, grad_w3 = lhs.grad, w1.grad, w2.grad, w3.grad
 
-    ref_out_backward = torch.ones_like(ref_out)
-    grad_lhs, grad_rhs = Gmm._eager_gmm_backward(
-        ref_out_backward, lhs, rhs,
-        group_sizes)
+    lhs.grad = w1.grad = w2.grad = w3.grad = None
+    out = Gmm.apply(lhs, top, w1, w2, w3)
+    out.sum().backward()
 
     assert torch.allclose(lhs.grad, grad_lhs.cpu())
-    assert torch.allclose(rhs.grad, grad_rhs.cpu())
-
-
+    assert torch.allclose(w1.grad, w1.grad.cpu())
+    assert torch.allclose(w2.grad, w2.grad.cpu())
+    assert torch.allclose(w3.grad, w3.grad.cpu())
 
 
 # input_sizes = [8, 128, 256, 512, 1024]
