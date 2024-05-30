@@ -925,14 +925,16 @@ class Gmm(torch.autograd.Function):
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
             current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, n)).global_tensor
-            hidden_states_sorted = xs.disable_manual_sharding(hidden_states_sorted, (0, None), (m, hidden_states_sorted.shape[-1])).global_tensor
-            gmm1 = xs.disable_manual_sharding(gmm1, (0, None), (m, gmm1.shape[-1])).global_tensor
-            gmm3 = xs.disable_manual_sharding(gmm3, (0, None), (m, gmm3.shape[-1])).global_tensor
-            silu = xs.disable_manual_sharding(silu, (0, None), (m, silu.shape[-1])).global_tensor
-            sgmm = xs.disable_manual_sharding(sgmm, (0, None), (m, sgmm.shape[-1])).global_tensor
+
+            # Checkpoints for backward
+            hidden_states_sorted = xs.disable_manual_sharding(hidden_states_sorted, (0, None), (m * k, hidden_states_sorted.shape[-1])).global_tensor
+            gmm1 = xs.disable_manual_sharding(gmm1, (0, None), (m * k, gmm1.shape[-1])).global_tensor
+            gmm3 = xs.disable_manual_sharding(gmm3, (0, None), (m * k, gmm3.shape[-1])).global_tensor
+            silu = xs.disable_manual_sharding(silu, (0, None), (m * k, silu.shape[-1])).global_tensor
+            sgmm = xs.disable_manual_sharding(sgmm, (0, None), (m * k, sgmm.shape[-1])).global_tensor
 
         # Save for backward
-        ctx.save_for_backward(hidden_states_sorted, w1, w2, w3, gmm1, gmm3, silu, sgmm)
+        ctx.save_for_backward(hidden_states_sorted, full_w1, full_w2, full_w3, gmm1, gmm3, silu, sgmm)
         ctx.hidden_states_indices = hidden_states_indices
         ctx.hidden_states_reverse_order = hidden_states_reverse_order
         ctx.group_sizes = group_sizes
@@ -942,6 +944,7 @@ class Gmm(torch.autograd.Function):
 
 
     @staticmethod
+    @xp.trace_me("gmm_forward")
     def backward(ctx, grad_output):
         from torch_xla.experimental.custom_kernel import _histogram, gmm_backward
 
@@ -954,6 +957,13 @@ class Gmm(torch.autograd.Function):
         hidden_states_reverse_order = ctx.hidden_states_reverse_order
         group_sizes = ctx.group_sizes
         m, k, n = grad_output.shape[0], ctx.k, hidden_states_sorted.shape[-1]
+
+        # Create a new node to keep the original sharding spec.
+        hidden_states_sorted = hidden_states_sorted + 0
+        gmm1 = gmm1 + 0
+        gmm3 = gmm3 + 0
+        silu = silu + 0
+        sgmm = sgmm + 0
 
         # Enter manual sharding zone
         if xs.get_global_mesh() is not None:
@@ -970,6 +980,7 @@ class Gmm(torch.autograd.Function):
         grad_output = grad_output.reshape(-1, n)[hidden_states_indices]
         grad_output, grad_w2 = gmm_backward(grad_output, sgmm, w2, group_sizes)
 
+        # print(grad_output.shape, gmm3.shape)
         grad_gmm1 = gmm3 * grad_output
         grad_gmm1 = torch.ops.aten.silu_backward(grad_gmm1, gmm1)
         grad_gmm1, grad_w1 = gmm_backward(grad_gmm1, hidden_states_sorted, w1, group_sizes)
