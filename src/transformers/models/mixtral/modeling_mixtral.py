@@ -919,10 +919,42 @@ class Gmm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        lhs, rhs, group_sizes = ctx.saved_tensors
-        grad_lhs = torch.cat([grad_output[i] @ rhs[i].t() for i in range(len(group_sizes))])
-        grad_rhs = torch.cat([lhs[i].t() @ grad_output[i] for i in range(len(group_sizes))])
-        return grad_lhs, grad_rhs, None
+        from torch_xla.experimental.custom_kernel import _histogram, gmm_backward
+
+        full_hidden_states, w1, w2, w3 = ctx.saved_tensors
+        hidden_states_indices = ctx.hidden_states_indices
+        hidden_states_reverse_order = ctx.hidden_states_reverse_order
+        group_sizes = ctx.group_sizes
+
+        # Enter manual sharding zone
+        hidden_states = xs.enable_manual_sharding(full_hidden_states, (0, None)).global_tensor
+        w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
+        w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
+        w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
+        grad_output = xs.enable_manual_sharding(grad_output, (0, None, None)).global_tensor
+
+        grad_output = grad_output[hidden_states_indices]
+        grad_output, grad_w2 = gmm_backward(grad_output, hidden_states, w2, group_sizes)
+
+        grad_output3 = F.silu(gmm(current_hidden_states, w1, group_sizes)) * grad_output
+        grad_output1 = gmm(current_hidden_states, w3, group_sizes) * grad_output
+        grad_output3 = torch.ops.aten.silu_backward(grad_output3, gmm(current_hidden_states, w1, group_sizes))
+        grad_ouput3, grad_w3 = gmm_backward(grad_output3, hidden_states, w3, group_sizes)
+        grad_output1, grad_w1 = gmm_backward(grad_output1, hidden_states, w1, group_sizes)
+        grad_output = grad_output1 + grad_output3
+
+
+        grad_output = grad_output[hidden_states_reverse_order]
+        grad_output = grad_output.reshape(-1, 2, grad_output.shape[-1]).sum(dim=1)
+
+
+        # Exit manual sharding zone
+        grad_output = xs.disable_manual_sharding(grad_output, (0, None), full_hidden_states.shape)
+        grad_w1 = xs.disable_manual_sharding(grad_w1, (None, None, None), w1.shape)
+        grad_w2 = xs.disable_manual_sharding(grad_w2, (None, None, None), w2.shape)
+        grad_w3 = xs.disable_manual_sharding(grad_w3, (None, None, None), w3.shape)
+
+        return grad_output, None, grad_w1, grad_w2, grad_w3
 
 
 class MixtralGmmTop2MLP(nn.Module):
