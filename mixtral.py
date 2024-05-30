@@ -24,7 +24,7 @@ config.flash_attention = False
 device = 'cpu'
 
 config.static=False
-config.gmm=True  # for cpu, it will use eager gmm.
+config.gmm=False
 torch.manual_seed(42)
 dynamic_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {dynamic_model.num_parameters()/2**20:.2f}M params")
@@ -42,7 +42,8 @@ for name, param in dynamic_model.named_parameters():
 print(f"Active weight: {active_weight/2**20:.2f}M params")
 
 # This is a custom config to enable the static/gmm mode of expert computation.
-# config.static=True
+config.static=True
+# config.gmm=True  # for cpu, it will use eager gmm.
 torch.manual_seed(42)
 static_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {static_model.num_parameters()/2**20:.2f}M params")
@@ -118,30 +119,63 @@ for test in tests:
     assert torch.allclose(lhs.grad, grad_lhs.cpu())
     assert torch.allclose(rhs.grad, grad_rhs.cpu())
 
+for test in tests:
+    from transformers.models.mixtral.modeling_mixtral import Gmm
 
-input_sizes = [8, 128, 256, 512, 1024]
-for input_size in input_sizes:
-    input = torch.randint(128, ((2, input_size // 2))).to(device)
-    static_output = static_model(input)
-    print(static_output.logits.shape)
-    # print(static_output.logits)
-    dynamic_output = dynamic_model(input)
-    print(dynamic_output.logits.shape)
-    # print(dynamic_output.logits)
-    assert torch.allclose(static_output.logits, dynamic_output.logits, atol=1e-6), "logits are not equal"
-
-    static_output.logits.sum().backward()
-    dynamic_output.logits.sum().backward()
-    for static_param, dynamic_param in zip(static_model.parameters(), dynamic_model.parameters()):
-        if static_param.grad is None:
-            continue
-        assert torch.allclose(static_param.grad, dynamic_param.grad, atol=1e-6), "grads are not equal"
+    num_groups = test['num_groups']
+    k = test['k']
+    m = test['m']
+    n = test['n']
+    lhs_dtype = rhs_dtype = torch.bfloat16
+    print(f"Running test with m={m}, k={k}, n={n}, num_groups={num_groups}")
 
 
-device = xm.xla_device()
-model = static_model.to(device)
-output = model(torch.randint(128, ((2, 128))).to(device))
-loss = torch.sum(output.logits)
-loss.backward()
-xm.mark_step()
-print(met.metrics_report())
+    # Create TopK
+    top1 = torch.randint(0, num_groups, (m, 1)).to(device)
+    top2 = torch.randint(0, num_groups, (m, 1)).to(device)
+    top = torch.cat([top1, top2], dim=1)
+
+    lhs = torch.rand(m, k, dtype=lhs_dtype, requires_grad=True)
+    w1 = torch.rand(num_groups, k, n, dtype=rhs_dtype, requires_grad=True)
+    w3 = torch.rand(num_groups, k, n, dtype=rhs_dtype, requires_grad=True)
+    w2 = torch.rand(num_groups, k, n * 4, dtype=rhs_dtype, requires_grad=True)
+    lhs.retain_grad()
+    w1.retain_grad()
+    w2.retain_grad()
+    w3.retain_grad()
+
+    context = object()
+    context.save_for_backward = lambda *args: args
+    ref_out = Gmm.forward(context, lhs, rhs, group_sizes)
+    ref_out.sum().backward()
+
+    ref_out_backward = torch.ones_like(ref_out)
+    grad_lhs, grad_rhs = Gmm._eager_gmm_backward(
+        ref_out_backward, lhs, rhs,
+        group_sizes)
+
+    assert torch.allclose(lhs.grad, grad_lhs.cpu())
+    assert torch.allclose(rhs.grad, grad_rhs.cpu())
+
+
+
+
+# input_sizes = [8, 128, 256, 512, 1024]
+# for input_size in input_sizes:
+#     input = torch.randint(128, ((2, input_size // 2))).to(device)
+#     static_output = static_model(input)
+#     print(static_output.logits.shape)
+#     # print(static_output.logits)
+#     dynamic_output = dynamic_model(input)
+#     print(dynamic_output.logits.shape)
+#     # print(dynamic_output.logits)
+#     assert torch.allclose(static_output.logits, dynamic_output.logits, atol=1e-6), "logits are not equal"
+
+
+# device = xm.xla_device()
+# model = MixtralForCausalLM(config).to(device)
+# output = model(torch.randint(128, ((2, 128))).to(device))
+# loss = torch.sum(output.logits)
+# loss.backward()
+# xm.mark_step()
+# print(met.metrics_report())
