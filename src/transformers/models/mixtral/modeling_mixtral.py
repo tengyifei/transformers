@@ -1116,7 +1116,8 @@ class MixtralSparseMoeBlock(nn.Module):
             w2 = torch.stack([expert.w2.weight.t() for expert in self.experts])
             w3 = torch.stack([expert.w3.weight.t() for expert in self.experts])
             print(w1.shape, w2.shape, w3.shape)
-            final_hidden_states = Gmm.apply(hidden_states, selected_experts, w1, w2, w3)
+            # final_hidden_states = Gmm.apply(hidden_states, selected_experts, w1, w2, w3)
+            final_hidden_states = Gmm.forward(Gmm, hidden_states, selected_experts, w1, w2, w3)
             final_hidden_states = (final_hidden_states * routing_weights[..., None]).sum(dim=1)
         else:
             final_hidden_states = self.experts(hidden_states, selected_experts)

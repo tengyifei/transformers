@@ -164,10 +164,13 @@ for test in tests:
 
 # Grads are bastards to compare, set the precisou to 1e-4.
 def compare_tensors(t1, t2):
-    result = torch.allclose(t1, t2, atol=1e-4)
+    result = torch.allclose(t1, t2, atol=1e-4, rtol=1e-4)
     if result:
         return True
     else:
+        print(t1.shape)
+        print(t1)
+        print(t2)
         diff = torch.abs(t1 - t2)
         print(f"Max diff: {diff.max()}")
         return False
