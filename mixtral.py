@@ -158,9 +158,13 @@ for test in tests:
     out.sum().backward()
 
     assert torch.allclose(lhs.grad, grad_lhs)
+    assert lhs.grad is not grad_lhs
     assert torch.allclose(w1.grad, grad_w1)
+    assert w1.grad is not grad_w1
     assert torch.allclose(w2.grad, grad_w2)
+    assert w2.grad is not grad_w2
     assert torch.allclose(w3.grad, grad_w3)
+    assert w3.grad is not grad_w3
 
 # Grads are bastards to compare, set the precisou to 1e-4.
 def compare_tensors(t1, t2):
