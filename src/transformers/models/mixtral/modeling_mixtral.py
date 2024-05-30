@@ -849,13 +849,17 @@ class Gmm(torch.autograd.Function):
 
     @staticmethod
     def _eager_gmm_backward(grad_output, lhs, rhs, group_sizes):
-        grad_lhs = grad_rhs = 0
+        """
+        For testing purpose.
+        """
+        grad_lhs = []
+        grad_rhs = []
         start = 0
         for i, size in enumerate(group_sizes):
-            grad_lhs += grad_output[start:start + size, :].t() @ rhs[i, :, :]
-            grad_rhs += lhs[start:start + size, :].t() @ grad_output[start:start + size, :]
+            grad_lhs.append(grad_output[start:start + size, :] @ rhs[i, :, :].transpose(-1, -2))
+            grad_rhs.append(lhs[start:start + size, :].t() @ grad_output[start:start + size, :])
             start += size
-        return grad_lhs.t(), grad_rhs
+        return torch.cat(grad_lhs), torch.stack(grad_rhs)
 
 
     @staticmethod

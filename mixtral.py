@@ -2,6 +2,7 @@ import torch
 import torch_xla
 import torch_xla.core.xla_model as xm
 import torch_xla.debug.metrics as met
+import numpy as np
 
 from transformers import AutoTokenizer, AutoConfig, MixtralForCausalLM
 
@@ -46,6 +47,78 @@ torch.manual_seed(42)
 static_model = MixtralForCausalLM(config).to(device)
 print(f"Model parameters: {static_model.num_parameters()/2**20:.2f}M params")
 
+tests = [
+    {
+        'm': 128,
+        'k': 128,
+        'n': 128,
+        'num_groups': 1
+    },
+    {
+        'm': 256,
+        'k': 128,
+        'n': 128,
+        'num_groups': 1
+    },
+    {
+        'm': 128,
+        'k': 256,
+        'n': 128,
+        'num_groups': 8
+    },
+    {
+        'm': 512,
+        'k': 128,
+        'n': 256,
+        'num_groups': 2
+    },
+]
+
+def group_sizes_strategy(m: int, num_groups: int) -> torch.Tensor:
+    # Randomly sample the ends of the groups in the m-dimension. Let the fuzzer
+    # sample with replacement so that it's possible to get zero-sized groups. Get
+    # 'num_groups - 1' run ends. The final group will end at 'm'.
+    ends_no_final = np.sort(
+        np.array(
+            [np.random.randint(low=0, high=m) for _ in range(num_groups - 1)],
+            dtype=np.int32,
+        ),)
+    ends = np.concatenate([ends_no_final, np.array([m], dtype=np.int32)])
+
+    # Calculate the run starts by shifting ends 1 to the right. The first run
+    # starts at zero.
+    starts = np.concatenate([np.zeros(1, dtype=np.int32), ends_no_final])
+    return torch.from_numpy(ends - starts).to(torch.int32)
+
+
+for test in tests:
+    from transformers.models.mixtral.modeling_mixtral import Gmm
+
+    num_groups = test['num_groups']
+    k = test['k']
+    m = test['m']
+    n = test['n']
+    lhs_dtype = rhs_dtype = torch.bfloat16
+    print(f"Running test with m={m}, k={k}, n={n}, num_groups={num_groups}")
+
+    lhs = torch.rand(m, k, dtype=lhs_dtype, requires_grad=True)
+    rhs = torch.rand(num_groups, k, n, dtype=rhs_dtype, requires_grad=True)
+    group_sizes = group_sizes_strategy(m=m, num_groups=num_groups)
+    lhs.retain_grad()
+    rhs.retain_grad()
+
+    ref_out = Gmm._eager_gmm(lhs, rhs, group_sizes)
+    ref_out.sum().backward()
+
+    ref_out_backward = torch.ones_like(ref_out)
+    grad_lhs, grad_rhs = Gmm._eager_gmm_backward(
+        ref_out_backward, lhs, rhs,
+        group_sizes)
+
+    assert torch.allclose(lhs.grad, grad_lhs.cpu())
+    assert torch.allclose(rhs.grad, grad_rhs.cpu())
+
+
 input_sizes = [8, 128, 256, 512, 1024]
 for input_size in input_sizes:
     input = torch.randint(128, ((2, input_size // 2))).to(device)
@@ -63,4 +136,4 @@ output = model(torch.randint(128, ((2, 128))).to(device))
 loss = torch.sum(output.logits)
 # loss.backward()
 xm.mark_step()
-print(met.metrics_report())
+# print(met.metrics_report())
