@@ -157,10 +157,10 @@ for test in tests:
     out = Gmm.apply(lhs, top, w1, w2, w3)
     out.sum().backward()
 
-    assert torch.allclose(lhs.grad, grad_lhs.cpu())
-    assert torch.allclose(w1.grad, w1.grad.cpu())
-    assert torch.allclose(w2.grad, w2.grad.cpu())
-    assert torch.allclose(w3.grad, w3.grad.cpu())
+    assert torch.allclose(lhs.grad, grad_lhs)
+    assert torch.allclose(w1.grad, grad_w1)
+    assert torch.allclose(w2.grad, grad_w2)
+    assert torch.allclose(w3.grad, grad_w3)
 
 # Grads are bastards to compare, set the precisou to 1e-4.
 def compare_tensors(t1, t2):
