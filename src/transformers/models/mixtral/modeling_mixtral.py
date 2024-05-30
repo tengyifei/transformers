@@ -944,7 +944,7 @@ class Gmm(torch.autograd.Function):
 
 
     @staticmethod
-    @xp.trace_me("gmm_forward")
+    @xp.trace_me("gmm_backward")
     def backward(ctx, grad_output):
         from torch_xla.experimental.custom_kernel import _histogram, gmm_backward
 
