@@ -846,6 +846,15 @@ class Gmm(torch.autograd.Function):
             start += group_sizes[i]
         return torch.cat(out)
 
+    @staticmethod
+    def _eager_gmm_backward(grad_output, lhs, rhs, group_sizes):
+        grad_lhs = grad_rhs = 0
+        start = 0
+        for i, size in enumerate(group_sizes):
+            grad_lhs += grad_output[start:start + size, :].t() @ rhs[i, :, :]
+            grad_rhs += lhs[start:start + size, :].t() @ grad_output[start:start + size, :]
+            start += size
+        return grad_lhs.t(), grad_rhs
 
     @staticmethod
     @xp.trace_me("gmm_forward")
@@ -861,27 +870,24 @@ class Gmm(torch.autograd.Function):
         """
         from torch_xla.experimental.custom_kernel import _histogram, gmm
 
-        # Create a new node to keep the original sharding spec.
-        w1 = w1 + 0
-        w2 = w2 + 0
-        w3 = w3 + 0
-
-        # Save for backward
-        ctx.save_for_backward(hidden_states, w1, w2, w3)
-
         device = hidden_states.device
         if device == torch.device('cpu'):
-            gmm = Gmm._eager_gmm
+            gmm = torch.autograd.grad()
         # m is global shape
         m, k, n, num_experts = hidden_states.shape[0], top_ks.shape[1], hidden_states.shape[-1], w1.shape[0]
+
+        # Create a new node to keep the original sharding spec.
+        full_w1 = w1 + 0
+        full_w2 = w2 + 0
+        full_w3 = w3 + 0
 
         # Enter manual sharding zone
         if xs.get_global_mesh() is not None:
             hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
             top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
-            w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
-            w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
-            w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
+            w1 = xs.enable_manual_sharding(full_w1, (None, None, None)).global_tensor
+            w2 = xs.enable_manual_sharding(full_w2, (None, None, None)).global_tensor
+            w3 = xs.enable_manual_sharding(full_w3, (None, None, None)).global_tensor
 
         # We want to create one big batch of tokens that has all top-k choices in it.
         # Our tokens will thus be duplicated k-times in the batch. To do this we,
@@ -900,7 +906,9 @@ class Gmm(torch.autograd.Function):
 
         # Replicated MixtralBlockSparseTop2MLP.forward
         # Here we just use silu and ignore the configuration given we need to manually write the backward pass.
-        current_hidden_states = F.silu(gmm(current_hidden_states, w1, group_sizes)) * gmm(current_hidden_states, w3, group_sizes)
+        gmm1 = gmm(current_hidden_states, w1, group_sizes)
+        gmm3 =  gmm(current_hidden_states, w3, group_sizes)
+        current_hidden_states = F.silu(gmm1) * gmm3
         current_hidden_states = gmm(current_hidden_states, w2, group_sizes)
 
         current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(-1, k, n)
@@ -908,11 +916,15 @@ class Gmm(torch.autograd.Function):
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
             current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, n)).global_tensor
+            gmm1 = xs.disable_manual_sharding(gmm1, (0, None), (m, gmm1.shape[-1])).global_tensor
+            gmm3 = xs.disable_manual_sharding(gmm3, (0, None), (m, gmm3.shape[-1])).global_tensor
 
         # Save for backward
+        ctx.save_for_backward(hidden_states, w1, w2, w3, gmm1, gmm3)
         ctx.hidden_states_indices = hidden_states_indices
         ctx.hidden_states_reverse_order = hidden_states_reverse_order
         ctx.group_sizes = group_sizes
+        ctx.k = k
 
         return current_hidden_states
 
@@ -921,32 +933,37 @@ class Gmm(torch.autograd.Function):
     def backward(ctx, grad_output):
         from torch_xla.experimental.custom_kernel import _histogram, gmm_backward
 
-        full_hidden_states, w1, w2, w3 = ctx.saved_tensors
+        device = grad_output.device
+        if device == torch.device('cpu'):
+            gmm_backward = Gmm._eager_gmm_backward
+
+        full_hidden_states, w1, w2, w3, gmm1, gmm3 = ctx.saved_tensors
         hidden_states_indices = ctx.hidden_states_indices
         hidden_states_reverse_order = ctx.hidden_states_reverse_order
         group_sizes = ctx.group_sizes
+        k = ctx.k
 
         # Enter manual sharding zone
         hidden_states = xs.enable_manual_sharding(full_hidden_states, (0, None)).global_tensor
         w1 = xs.enable_manual_sharding(w1, (None, None, None)).global_tensor
         w2 = xs.enable_manual_sharding(w2, (None, None, None)).global_tensor
         w3 = xs.enable_manual_sharding(w3, (None, None, None)).global_tensor
+        gmm1 = xs.enable_manual_sharding(gmm1, (0, None)).global_tensor
+        gmm3 = xs.enable_manual_sharding(gmm3, (0, None)).global_tensor
         grad_output = xs.enable_manual_sharding(grad_output, (0, None, None)).global_tensor
 
         grad_output = grad_output[hidden_states_indices]
         grad_output, grad_w2 = gmm_backward(grad_output, hidden_states, w2, group_sizes)
 
-        grad_output3 = F.silu(gmm(current_hidden_states, w1, group_sizes)) * grad_output
-        grad_output1 = gmm(current_hidden_states, w3, group_sizes) * grad_output
-        grad_output3 = torch.ops.aten.silu_backward(grad_output3, gmm(current_hidden_states, w1, group_sizes))
+        grad_output3 = F.silu(gmm1) * grad_output
+        grad_output1 = gmm3 * grad_output
+        grad_output3 = torch.ops.aten.silu_backward(grad_output3, gmm1)
         grad_ouput3, grad_w3 = gmm_backward(grad_output3, hidden_states, w3, group_sizes)
         grad_output1, grad_w1 = gmm_backward(grad_output1, hidden_states, w1, group_sizes)
         grad_output = grad_output1 + grad_output3
 
-
         grad_output = grad_output[hidden_states_reverse_order]
-        grad_output = grad_output.reshape(-1, 2, grad_output.shape[-1]).sum(dim=1)
-
+        grad_output = grad_output.reshape(-1, k, grad_output.shape[-1]).sum(dim=1)
 
         # Exit manual sharding zone
         grad_output = xs.disable_manual_sharding(grad_output, (0, None), full_hidden_states.shape)
