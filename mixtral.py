@@ -130,10 +130,18 @@ for input_size in input_sizes:
     # print(dynamic_output.logits)
     assert torch.allclose(static_output.logits, dynamic_output.logits, atol=1e-6), "logits are not equal"
 
+    static_output.logits.sum().backward()
+    dynamic_output.logits.sum().backward()
+    for static_param, dynamic_param in zip(static_model.parameters(), dynamic_model.parameters()):
+        if static_param.grad is None:
+            continue
+        assert torch.allclose(static_param.grad, dynamic_param.grad, atol=1e-6), "grads are not equal"
+
+
 device = xm.xla_device()
 model = static_model.to(device)
 output = model(torch.randint(128, ((2, 128))).to(device))
 loss = torch.sum(output.logits)
-# loss.backward()
+loss.backward()
 xm.mark_step()
-# print(met.metrics_report())
+print(met.metrics_report())
