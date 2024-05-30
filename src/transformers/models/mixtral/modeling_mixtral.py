@@ -846,6 +846,7 @@ class Gmm(torch.autograd.Function):
             start += group_sizes[i]
         return torch.cat(out)
 
+
     @staticmethod
     def _eager_gmm_backward(grad_output, lhs, rhs, group_sizes):
         grad_lhs = grad_rhs = 0
@@ -855,6 +856,7 @@ class Gmm(torch.autograd.Function):
             grad_rhs += lhs[start:start + size, :].t() @ grad_output[start:start + size, :]
             start += size
         return grad_lhs.t(), grad_rhs
+
 
     @staticmethod
     @xp.trace_me("gmm_forward")
@@ -872,7 +874,7 @@ class Gmm(torch.autograd.Function):
 
         device = hidden_states.device
         if device == torch.device('cpu'):
-            gmm = torch.autograd.grad()
+            gmm = Gmm._eager_gmm
         # m is global shape
         m, k, n, num_experts = hidden_states.shape[0], top_ks.shape[1], hidden_states.shape[-1], w1.shape[0]
 
