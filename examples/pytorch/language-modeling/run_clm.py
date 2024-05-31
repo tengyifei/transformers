@@ -460,6 +460,7 @@ def main():
     config.static = model_args.static
     config.gmm = model_args.gmm
     assert (config.static and config.gmm) == False, "Mixtral's MoE can't be both static and gmm at the same time"
+    config.gmm_stack = False
 
     if model_args.model_name_or_path:
         torch_dtype = (
