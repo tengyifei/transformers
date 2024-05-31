@@ -918,9 +918,8 @@ class Gmm(torch.autograd.Function):
          # Should I save silu activations?
         silu = F.silu(gmm1)
         sgmm = silu * gmm3
-        current_hidden_states = gmm(sgmm, w2, group_sizes)
-
-        current_hidden_states = current_hidden_states[hidden_states_reverse_order].reshape(-1, k, n)
+        gmm2 = gmm(sgmm, w2, group_sizes)
+        current_hidden_states = gmm2[hidden_states_reverse_order].reshape(-1, k, n)
 
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
@@ -935,7 +934,7 @@ class Gmm(torch.autograd.Function):
 
         # Save for backward
         ctx.save_for_backward(hidden_states_sorted, full_w1, full_w2, full_w3, gmm1, gmm3, silu, sgmm)
-        ctx.hidden_states_indices = hidden_states_indices
+        ctx.hidden_states_order = hidden_states_order
         ctx.hidden_states_reverse_order = hidden_states_reverse_order
         ctx.group_sizes = group_sizes
         ctx.k = k
@@ -948,14 +947,12 @@ class Gmm(torch.autograd.Function):
     def backward(ctx, grad_output):
         from torch_xla.experimental.custom_kernel import _histogram, gmm_backward
 
-        print("gmm_backward")
-
         device = grad_output.device
         if device == torch.device('cpu'):
             gmm_backward = Gmm._eager_gmm_backward
 
         hidden_states_sorted, w1, w2, w3, gmm1, gmm3, silu, sgmm = ctx.saved_tensors
-        hidden_states_indices = ctx.hidden_states_indices
+        hidden_states_order = ctx.hidden_states_order
         hidden_states_reverse_order = ctx.hidden_states_reverse_order
         group_sizes = ctx.group_sizes
         m, k, n = grad_output.shape[0], ctx.k, hidden_states_sorted.shape[-1]
@@ -979,11 +976,9 @@ class Gmm(torch.autograd.Function):
             sgmm = xs.enable_manual_sharding(sgmm, (0, None)).global_tensor
             grad_output = xs.enable_manual_sharding(grad_output, (0, None, None)).global_tensor
 
-        grad_output = grad_output.reshape(-1, n)[hidden_states_indices]
-        # print(grad_output.shape, sgmm.shape, w2.shape)
-        grad_output, grad_w2 = gmm_backward(grad_output, sgmm, w2, group_sizes)
+        grad_output_sorted = grad_output.reshape(-1, n)[hidden_states_order]
+        grad_output, grad_w2 = gmm_backward(grad_output_sorted, sgmm, w2, group_sizes)
 
-        # print(grad_output.shape, gmm3.shape)
         grad_gmm1 = gmm3 * grad_output
         grad_gmm1 = torch.ops.aten.silu_backward(grad_gmm1, gmm1)
         grad_gmm1, grad_w1 = gmm_backward(grad_gmm1, hidden_states_sorted, w1, group_sizes)
@@ -1115,9 +1110,7 @@ class MixtralSparseMoeBlock(nn.Module):
             w1 = torch.stack([expert.w1.weight.t() for expert in self.experts])
             w2 = torch.stack([expert.w2.weight.t() for expert in self.experts])
             w3 = torch.stack([expert.w3.weight.t() for expert in self.experts])
-            # print(w1.shape, w2.shape, w3.shape)
             final_hidden_states = Gmm.apply(hidden_states, selected_experts, w1, w2, w3)
-            # final_hidden_states = Gmm.forward(Gmm, hidden_states, selected_experts, w1, w2, w3)
             final_hidden_states = (final_hidden_states * routing_weights[..., None]).sum(dim=1)
         else:
             final_hidden_states = self.experts(hidden_states, selected_experts)
