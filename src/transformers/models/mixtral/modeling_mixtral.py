@@ -884,9 +884,10 @@ class Gmm(torch.autograd.Function):
         m, k, n, num_experts = hidden_states.shape[0], top_ks.shape[1], hidden_states.shape[-1], w1.shape[0]
 
         # Create a new node to keep the original sharding spec.
-        full_w1 = w1 + 0
-        full_w2 = w2 + 0
-        full_w3 = w3 + 0
+        zero = torch.zeros((1,), device=device, dtype=hidden_states.dtype)
+        full_w1 = w1 + zero
+        full_w2 = w2 + zero
+        full_w3 = w3 + zero
 
         # Enter manual sharding zone
         if xs.get_global_mesh() is not None:
@@ -933,10 +934,7 @@ class Gmm(torch.autograd.Function):
             sgmm = xs.disable_manual_sharding(sgmm, (0, None), (m * k, sgmm.shape[-1])).global_tensor
 
         # Save for backward
-        ctx.save_for_backward(hidden_states_sorted, full_w1, full_w2, full_w3, gmm1, gmm3, silu, sgmm)
-        ctx.hidden_states_order = hidden_states_order
-        ctx.hidden_states_reverse_order = hidden_states_reverse_order
-        ctx.group_sizes = group_sizes
+        ctx.save_for_backward(hidden_states_sorted, full_w1, full_w2, full_w3, gmm1, gmm3, silu, sgmm, hidden_states_order, hidden_states_reverse_order, group_sizes)
         ctx.k = k
 
         return current_hidden_states
@@ -951,18 +949,16 @@ class Gmm(torch.autograd.Function):
         if device == torch.device('cpu'):
             gmm_backward = Gmm._eager_gmm_backward
 
-        hidden_states_sorted, w1, w2, w3, gmm1, gmm3, silu, sgmm = ctx.saved_tensors
-        hidden_states_order = ctx.hidden_states_order
-        hidden_states_reverse_order = ctx.hidden_states_reverse_order
-        group_sizes = ctx.group_sizes
+        hidden_states_sorted, w1, w2, w3, gmm1, gmm3, silu, sgmm, hidden_states_order, hidden_states_reverse_order, group_sizes = ctx.saved_tensors
         m, k, n = grad_output.shape[0], ctx.k, hidden_states_sorted.shape[-1]
 
         # Create a new node to keep the original sharding spec.
-        hidden_states_sorted = hidden_states_sorted + 0
-        gmm1 = gmm1 + 0
-        gmm3 = gmm3 + 0
-        silu = silu + 0
-        sgmm = sgmm + 0
+        zero = torch.zeros((1,), device=device, dtype=hidden_states_sorted.dtype)
+        hidden_states_sorted = hidden_states_sorted + zero
+        gmm1 = gmm1 + zero
+        gmm3 = gmm3 + zero
+        silu = silu + zero
+        sgmm = sgmm + zero
 
         # Enter manual sharding zone
         if xs.get_global_mesh() is not None:
