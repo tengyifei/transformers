@@ -180,6 +180,14 @@ class ModelArguments:
             )
         },
     )
+    gmm_stack: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enable Mixtral's gmm_stack implementation"
+            )
+        },
+    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
@@ -459,8 +467,11 @@ def main():
     config.flash_attention = model_args.flash_attention
     config.static = model_args.static
     config.gmm = model_args.gmm
-    assert (config.static and config.gmm) == False, "Mixtral's MoE can't be both static and gmm at the same time"
-    config.gmm_stack = False
+    config.gmm_stack = model_args.gmm_stack
+    count = 0
+    for i in [config.static, config.gmm, config.gmm_stack]:
+        count += 1 if i else 0
+    assert count == 1, "Mixtral's MoE can only be one of (static, gmm, gmm_stack)."
 
     if model_args.model_name_or_path:
         torch_dtype = (

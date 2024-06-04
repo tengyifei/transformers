@@ -2147,6 +2147,11 @@ class Trainer:
         profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
         profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
         profile_logdir = os.environ.get('PROFILE_LOGDIR', None)
+
+        # Initilize the optimizer state.
+        # from torch_xla.experimental.distributed_checkpoint import prime_optimizer
+        # prime_optimizer(self.optimizer)
+
         for epoch in range(epochs_trained, num_train_epochs):
             epoch_iterator = train_dataloader
             if hasattr(epoch_iterator, "set_epoch"):
