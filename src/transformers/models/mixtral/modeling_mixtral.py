@@ -987,17 +987,18 @@ class Gmm(torch.autograd.Function):
         grad_output = grad_output[hidden_states_reverse_order]
         grad_output = grad_output.reshape(-1, k, grad_output.shape[-1]).sum(dim=1)
 
+        # Use slice to fake all-reduce-scatter. To do, replace it with all-reduce-scatter.
+        grad_w1 = grad_w1[..., :w1.shape[-1]//4]
+        grad_w2 = grad_w2[..., :w1.shape[-1]//4, :]
+        grad_w3 = grad_w3[..., :w1.shape[-1]//4]
+
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
             grad_output = xs.disable_manual_sharding(grad_output, (0, None), (m, n)).global_tensor
-            grad_w1 = xs.disable_manual_sharding(grad_w1, (None, None, None), w1.shape).global_tensor
-            grad_w2 = xs.disable_manual_sharding(grad_w2, (None, None, None), w2.shape).global_tensor
-            grad_w3 = xs.disable_manual_sharding(grad_w3, (None, None, None), w3.shape).global_tensor
-
-            # shard the gradients
-            xs.mark_sharding(grad_w1, xs.get_global_mesh(), (None, None, 0))
-            xs.mark_sharding(grad_w2, xs.get_global_mesh(), (None, 0, None))
-            xs.mark_sharding(grad_w3, xs.get_global_mesh(), (None, None, 0))
+            # TODO: make the 0s more programmatic.
+            grad_w1 = xs.disable_manual_sharding(grad_w1, (None, None, 0), w1.shape).global_tensor
+            grad_w2 = xs.disable_manual_sharding(grad_w2, (None, 0, None), w2.shape).global_tensor
+            grad_w3 = xs.disable_manual_sharding(grad_w3, (None, None, 0), w3.shape).global_tensor
 
         return grad_output, None, grad_w1, grad_w2, grad_w3
 
