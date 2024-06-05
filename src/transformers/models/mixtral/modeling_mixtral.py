@@ -994,6 +994,11 @@ class Gmm(torch.autograd.Function):
             grad_w2 = xs.disable_manual_sharding(grad_w2, (None, None, None), w2.shape).global_tensor
             grad_w3 = xs.disable_manual_sharding(grad_w3, (None, None, None), w3.shape).global_tensor
 
+            # shard the gradients
+            xs.mark_sharding(grad_w1, xs.get_global_mesh(), (None, None, 0))
+            xs.mark_sharding(grad_w2, xs.get_global_mesh(), (None, 0, None))
+            xs.mark_sharding(grad_w3, xs.get_global_mesh(), (None, None, 0))
+
         return grad_output, None, grad_w1, grad_w2, grad_w3
 
 
