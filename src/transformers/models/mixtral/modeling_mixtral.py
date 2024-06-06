@@ -70,6 +70,8 @@ if is_torch_fx_available():
 
 import torch_xla.debug.profiler as xp
 import torch_xla.distributed.spmd as xs
+import torch_xla.core.xla_model as xm
+import torch_xla
 
 
 logger = logging.get_logger(__name__)
@@ -987,13 +989,15 @@ class Gmm(torch.autograd.Function):
         grad_output = grad_output[hidden_states_reverse_order]
         grad_output = grad_output.reshape(-1, k, grad_output.shape[-1]).sum(dim=1)
 
-        # Use slice to fake all-reduce-scatter. To do, replace it with all-reduce-scatter.
-        grad_w1 = grad_w1[..., :w1.shape[-1]//4]
-        grad_w2 = grad_w2[..., :w1.shape[-1]//4, :]
-        grad_w3 = grad_w3[..., :w1.shape[-1]//4]
-
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
+            # Here we do a manual reduce scatter as SPMD will not be able to infer this after the manual sharding zone.
+            groups = [xs.get_global_mesh().device_ids]  # a single group across the whole world
+            world_size = len(groups[0])
+            grad_w1 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_w1, 1 / world_size, -1, world_size, groups)
+            grad_w2 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_w2, 1 / world_size, -2, world_size, groups)
+            grad_w3 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_w3, 1 / world_size, -1, world_size, groups)
+
             grad_output = xs.disable_manual_sharding(grad_output, (0, None), (m, n)).global_tensor
             # TODO: make the 0s more programmatic.
             grad_w1 = xs.disable_manual_sharding(grad_w1, (None, None, 0), w1.shape).global_tensor
