@@ -367,6 +367,7 @@ class MixtralAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
+        # Non FA path doesn't deal with 2D sharding.
         if not self.config.flash_attention:
             attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -394,7 +395,7 @@ class MixtralAttention(nn.Module):
             query_states /= math.sqrt(self.head_dim)
             partition_spec = None
             if xs.get_global_mesh() is not None:
-                partition_spec = ('fsdp', None, None, None)
+                partition_spec = ('fsdp', 'tensor', None, None)
             attn_output = flash_attention(query_states, key_states, value_states, causal=True, partition_spec=partition_spec)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
