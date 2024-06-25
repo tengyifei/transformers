@@ -894,11 +894,11 @@ class Gmm(torch.autograd.Function):
 
         # Enter manual sharding zone
         if xs.get_global_mesh() is not None:
-            hidden_states = xs.enable_manual_sharding(hidden_states, (0, None)).global_tensor
-            top_ks = xs.enable_manual_sharding(top_ks, (0, None)).global_tensor
-            w1 = xs.enable_manual_sharding(full_w1, (None, None, None)).global_tensor
-            w2 = xs.enable_manual_sharding(full_w2, (None, None, None)).global_tensor
-            w3 = xs.enable_manual_sharding(full_w3, (None, None, None)).global_tensor
+            hidden_states = xs.enable_manual_sharding(hidden_states, ('fsdp', None)).global_tensor
+            top_ks = xs.enable_manual_sharding(top_ks, ('fsdp', None)).global_tensor
+            w1 = xs.enable_manual_sharding(full_w1, (None, None, 'tensor')).global_tensor
+            w2 = xs.enable_manual_sharding(full_w2, (None, 'tensor', None)).global_tensor
+            w3 = xs.enable_manual_sharding(full_w3, (None, None, 'tensor')).global_tensor
 
         # We want to create one big batch of tokens that has all top-k choices in it.
         # Our tokens will thus be duplicated k-times in the batch. To do this we,

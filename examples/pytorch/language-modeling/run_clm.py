@@ -681,15 +681,21 @@ def main():
 
             # Here we intentionally skip layernorm and moe.gate weights given they are small.
             if 'embed_tokens' in name:
-                xs.mark_sharding(param, spmd_mesh, (('tensor', 'fsdp'), None))
+                xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
             elif 'q_proj' in name or 'k_proj' in name or 'v_proj' in name:
                 xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
             elif 'o_proj' in name:
                 xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
             elif 'w1' in name or 'w3' in name:
-                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
+                if model_args.gmm:  # It doesn't use nn.Linear and no t.
+                    xs.mark_sharding(param, spmd_mesh, (None, 'fsdp', 'tensor'))
+                else:
+                    xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
             elif 'w2' in name:
-                xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
+                if model_args.gmm:  # It doesn't use nn.Linear and no t.
+                    xs.mark_sharding(param, spmd_mesh, (None, 'tensor', 'fsdp'))
+                else:
+                    xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
             elif 'lm_head' in name:
                 xs.mark_sharding(param, spmd_mesh, (('tensor', 'fsdp'), None))
 
