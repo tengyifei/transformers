@@ -681,7 +681,7 @@ def main():
 
             # Here we intentionally skip layernorm and moe.gate weights given they are small.
             if 'embed_tokens' in name:
-                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'), 1)
+                xs.mark_sharding(param, spmd_mesh, (('tensor', 'fsdp'), None))
             elif 'q_proj' in name or 'k_proj' in name or 'v_proj' in name:
                 xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
             elif 'o_proj' in name:
@@ -691,7 +691,7 @@ def main():
             elif 'w2' in name:
                 xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
             elif 'lm_head' in name:
-                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'), 1)
+                xs.mark_sharding(param, spmd_mesh, (('tensor', 'fsdp'), None))
 
             print(f'{name} {torch_xla._XLAC._get_xla_sharding_spec(param)}')
 
