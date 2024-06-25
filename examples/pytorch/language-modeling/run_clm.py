@@ -679,18 +679,19 @@ def main():
         for name, param in model.named_parameters():
             print('> [2D] Sharding tensor', name, param.shape)
 
+            # Here we intentionally skip layernorm and moe.gate weights given they are small.
             if 'embed_tokens' in name:
-                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
+                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'), 1)
             elif 'q_proj' in name or 'k_proj' in name or 'v_proj' in name:
-                xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
-            elif 'o_proj' in name:
                 xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
+            elif 'o_proj' in name:
+                xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
             elif 'w1' in name or 'w3' in name:
                 xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
             elif 'w2' in name:
                 xs.mark_sharding(param, spmd_mesh, ('fsdp', 'tensor'))
             elif 'lm_head' in name:
-                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'))
+                xs.mark_sharding(param, spmd_mesh, ('tensor', 'fsdp'), 1)
 
             print(f'{name} {torch_xla._XLAC._get_xla_sharding_spec(param)}')
 
