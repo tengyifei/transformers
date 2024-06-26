@@ -1005,8 +1005,7 @@ class Gmm(torch.autograd.Function):
 
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
-            device_ids = ctx.device_ids
-            if device_ids is None:
+            if not hasattr(ctx, "device_ids"):
                 # Here we do a manual reduce scatter as SPMD will not be able to infer this after the manual sharding zone.
                 groups = [xs.get_global_mesh().device_ids]  # a single group across the whole world
                 world_size = len(groups[0])
@@ -1020,6 +1019,8 @@ class Gmm(torch.autograd.Function):
                 grad_w2 = xs.disable_manual_sharding(grad_w2, (None, 0, None), w2.shape).global_tensor
                 grad_w3 = xs.disable_manual_sharding(grad_w3, (None, None, 0), w3.shape).global_tensor
             else:  # 2d sharding
+                device_ids = ctx.device_ids
+
                 # Only reduce-scatter along tensor axis.
                 grad_output = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_output, 1.0, -1, device_ids.shape[-1], device_ids.tolist())
 
