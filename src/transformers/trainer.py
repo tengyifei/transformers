@@ -2251,7 +2251,7 @@ class Trainer:
                     if is_last_step_and_steps_less_than_grad_acc:
                         self.accelerator.gradient_state._set_sync_gradients(True)
 
-                    Gradient clipping
+                    # Gradient clipping
                     if args.max_grad_norm is not None and args.max_grad_norm > 0:
                         # deepspeed does its own clipping
 
@@ -3168,11 +3168,11 @@ class Trainer:
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss)
+        # if self.use_apex:
+        #     with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+        #         scaled_loss.backward()
+        # else:
+        #     self.accelerator.backward(loss)
 
         return loss.detach() / self.args.gradient_accumulation_steps
 

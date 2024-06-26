@@ -884,7 +884,7 @@ class Gmm(torch.autograd.Function):
         if device == torch.device('cpu'):
             gmm = Gmm._eager_gmm
         # m is global shape
-        m, k, n, num_experts = hidden_states.shape[0], top_ks.shape[1], hidden_states.shape[-1], w1.shape[0]
+        m, k, n, num_experts, l = hidden_states.shape[0], top_ks.shape[1], hidden_states.shape[-1], w1.shape[0], w1.shape[-1]
 
         # Create a new node to keep the original sharding spec.
         zero = torch.zeros((1,), device=device, dtype=hidden_states.dtype)
@@ -927,14 +927,25 @@ class Gmm(torch.autograd.Function):
 
         # Exit manual sharding zone
         if xs.get_global_mesh() is not None:
-            current_hidden_states = xs.disable_manual_sharding(current_hidden_states, (0, None, None), (m, k, n)).global_tensor
+            # For 2D sharding, we need to manually all-reduce the final results
+            mesh = xs.get_global_mesh()
+            if mesh.shape()['tensor'] > 1:
+                # Assume tensor axis is the last dim. Otherwise, we will need some complicated transoforms.
+                assert mesh.get_axis_name_idx('tensor') == len(mesh.mesh_shape) - 1
+                device_ids = mesh.get_logical_mesh()
+                device_ids = device_ids.reshape(-1, device_ids.shape[-1])
+                # Only reduce-scatter along tensor axis.
+                current_hidden_states = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, current_hidden_states, 1.0, -1, device_ids.shape[-1], device_ids.tolist())
+
+
+            current_hidden_states = xs.disable_manual_sharding(current_hidden_states, ('fsdp', None, 'tensor'), (m, k, n)).global_tensor
 
             # Checkpoints for backward
-            hidden_states_sorted = xs.disable_manual_sharding(hidden_states_sorted, (0, None), (m * k, hidden_states_sorted.shape[-1])).global_tensor
-            gmm1 = xs.disable_manual_sharding(gmm1, (0, None), (m * k, gmm1.shape[-1])).global_tensor
-            gmm3 = xs.disable_manual_sharding(gmm3, (0, None), (m * k, gmm3.shape[-1])).global_tensor
-            silu = xs.disable_manual_sharding(silu, (0, None), (m * k, silu.shape[-1])).global_tensor
-            sgmm = xs.disable_manual_sharding(sgmm, (0, None), (m * k, sgmm.shape[-1])).global_tensor
+            hidden_states_sorted = xs.disable_manual_sharding(hidden_states_sorted, ('fsdp', None), (m * k, hidden_states_sorted.shape[-1])).global_tensor
+            gmm1 = xs.disable_manual_sharding(gmm1, ('fsdp', 'tensor'), (m * k, l)).global_tensor
+            gmm3 = xs.disable_manual_sharding(gmm3, ('fsdp', 'tensor'), (m * k, l)).global_tensor
+            silu = xs.disable_manual_sharding(silu, ('fsdp', 'tensor'), (m * k, l)).global_tensor
+            sgmm = xs.disable_manual_sharding(sgmm, ('fsdp', 'tensor'), (m * k, l)).global_tensor
 
         # Save for backward
         ctx.save_for_backward(hidden_states_sorted, full_w1, full_w2, full_w3, gmm1, gmm3, silu, sgmm, hidden_states_order, hidden_states_reverse_order, group_sizes)
