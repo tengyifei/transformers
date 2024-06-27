@@ -994,12 +994,17 @@ class Gmm(torch.autograd.Function):
         grad_gmm1 = gmm3 * grad_output
         grad_gmm1 = torch.ops.aten.silu_backward(grad_gmm1, gmm1)
         grad_gmm1, grad_w1 = gmm_backward(grad_gmm1, hidden_states_sorted, w1, group_sizes)
+        if hasattr(ctx, "device_ids"):
+            # Reduce-scatter along tensor axis. Do it here to reduce peak memory.
+            grad_gmm1 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_gmm1, 1.0, -1, ctx.device_ids.shape[-1], ctx.device_ids.tolist())
 
         grad_gmm3 = silu * grad_output
         grad_gmm3, grad_w3 = gmm_backward(grad_gmm3, hidden_states_sorted, w3, group_sizes)
+        if hasattr(ctx, "device_ids"):
+            # Reduce-scatter along tensor axis. Do it here to reduce peak memory.
+            grad_gmm3 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_gmm3, 1.0, -1, ctx.device_ids.shape[-1], ctx.device_ids.tolist())
 
         grad_output = grad_gmm1 + grad_gmm3
-
         grad_output = grad_output[hidden_states_reverse_order]
         grad_output = grad_output.reshape(-1, k, grad_output.shape[-1]).sum(dim=1)
 
@@ -1019,14 +1024,9 @@ class Gmm(torch.autograd.Function):
                 grad_w2 = xs.disable_manual_sharding(grad_w2, (None, 0, None), w2.shape).global_tensor
                 grad_w3 = xs.disable_manual_sharding(grad_w3, (None, None, 0), w3.shape).global_tensor
             else:  # 2d sharding
-                device_ids = ctx.device_ids
-
-                # Only reduce-scatter along tensor axis.
-                grad_output = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_output, 1.0, -1, device_ids.shape[-1], device_ids.tolist())
-
                 # Only reduce-scatter along fsdp axis.
                 # TODO: support multi-slice.
-                device_ids = device_ids.T
+                device_ids = ctx.device_ids.T
                 world_size = device_ids.shape[-1]
                 grad_w1 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_w1, 1 / world_size, -2, world_size, device_ids.tolist())
                 grad_w2 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_w2, 1 / world_size, -1, world_size, device_ids.tolist())
