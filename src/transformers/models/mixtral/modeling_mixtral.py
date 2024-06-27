@@ -1004,6 +1004,7 @@ class Gmm(torch.autograd.Function):
             # Reduce-scatter along tensor axis. Do it here to reduce peak memory.
             grad_gmm3 = torch_xla.torch_xla._XLAC._xla_spmd_reduce_scatter(xm.REDUCE_SUM, grad_gmm3, 1.0, -1, ctx.device_ids.shape[-1], ctx.device_ids.tolist())
 
+        xm.optimization_barrier_([grad_gmm1, grad_gmm3])
         grad_output = grad_gmm1 + grad_gmm3
         grad_output = grad_output[hidden_states_reverse_order]
         grad_output = grad_output.reshape(-1, k, grad_output.shape[-1]).sum(dim=1)
