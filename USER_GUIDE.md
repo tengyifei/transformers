@@ -106,7 +106,6 @@ python3 examples/pytorch/language-modeling/run_clm.py \
 
 *   `PJRT_DEVICE`: Specify the XLA device.
 *   `XLA_USE_SPMD`: Turn on GSPMD.
-*   `XLA_USE_BF16`: Force to use bfloat16 as default dtype.
 *   `XLA_IR_DEBUG`: Capture Python stack trace in Lazy IRs.
 *   `XLA_HLO_DEBUG`: Capture Python stack trace in HLOs.
 *   `PROFILE_EPOCH`: Specify which epoch to start taking the profile.
