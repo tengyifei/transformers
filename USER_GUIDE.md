@@ -9,7 +9,7 @@ This user guide provides a concise overview of the essential steps required to r
 The following setup assumes to run the training job with Mixtral 7 x 8B on GCE TPUs. Please follow corresponding TPU generation's user guide to setup the GCE TPUs. For GKE users, most of the commands below also apply.
 
 
-### HF Mixtral 7 x 8 Environment Setup
+### HF Mixtral 7 x 8B Environment Setup
 
 Here both PyTorch and PyTorch/XLA nightly are used with our fork of HuggingFace.
 ```
@@ -54,7 +54,7 @@ And the command to copy the config.
 gcloud compute tpus tpu-vm scp fsdp_config.json $TPU_NAME:~/fsdp_config.json --worker all --project $PROJECT --zone=$ZONE
 ```
 
-## Steps to Run HF Llama 2
+## Steps to Run HF Mixtral 8 x 7B
 Following is the gcloud ssh command to run the training job from the host:
 ```
 gcloud alpha compute tpus tpu-vm ssh ${TPU_NAME} \
