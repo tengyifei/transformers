@@ -123,4 +123,4 @@ python3 examples/pytorch/language-modeling/run_clm.py \
 *   `--spmd_2d_sharding`: [int] Enable 2D sharding for Mixtral. This conflicts with FSDP. Default: 0.
 *   `--static`: [bool] Enable baseline static approach. This produces much worse performance than gmm. Default: False.
 *   `--gmm_stack`: [bool] Enable a debug mode gmm. This produces much worse performance than gmm. Default: False.
-*   `--per_device_train_batch_size`: [int] Specify the global batch size. GSPMD treats the program as a singel device program. Default: False.
+*   `--per_device_train_batch_size`: [int] Specify the global batch size. GSPMD treats the program as a singel device program.
