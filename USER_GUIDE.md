@@ -113,7 +113,7 @@ python3 examples/pytorch/language-modeling/run_clm.py \
   --torch_dtype bfloat16 \
   --dataloader_drop_last yes \
   --flash_attention \
-  --max_steps 10 \
+  --num_train_epochs 1 \
   --gmm
 '
 ```
@@ -143,6 +143,7 @@ python3 examples/pytorch/language-modeling/run_clm.py \
 *   `--static`: [bool] Enable baseline static approach. This produces much worse performance than gmm. Default: False.
 *   `--gmm_stack`: [bool] Enable a debug mode gmm. This produces much worse performance than gmm. Default: False.
 *   `--per_device_train_batch_size`: [int] Specify the global batch size. GSPMD treats the program as a singel device program.
+*   `--num_train_epochs`: [int] Specify the total number of epochs. If the total steps is too large, try setting `--max_steps` instead to speed up the experiment.
 
 ## How to measure the step time?
 A profile will be captured in `/tmp/home/`. Just use TensorBoard to open the profile and measure the step time from the "Trace View."
