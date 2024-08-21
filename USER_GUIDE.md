@@ -8,6 +8,13 @@ This user guide provides a concise overview of the essential steps required to r
 
 The following setup assumes to run the training job with Mixtral 7 x 8B on GCE TPUs. Please follow corresponding TPU generation's user guide to setup the GCE TPUs. For GKE users, most of the commands below also apply.
 
+### Setup Environment of Your TPUs
+Please replace all your-* with your TPUs' information.
+```
+export TPU_NAME=your-tpu-name
+export ZONE=your-tpu-zone
+export PROJECT=your-tpu-project
+```
 
 ### HF Mixtral 7 x 8B Environment Setup
 
@@ -32,7 +39,19 @@ pip3 install accelerate datasets evaluate scikit-learn huggingface-hub
 '
 ```
 
-The next step for HF setup is to copy your Mixtral config into the TPU VM.
+The next step is to sign into HF such that you can get accesses to the tokenizer or model checkpoints. Please replace `your_token` with your HF token.
+```
+gcloud alpha compute tpus tpu-vm ssh ${TPU_NAME} \
+--zone ${ZONE} \
+--project ${PROJECT} \
+--worker=all \
+--command='
+export PATH=$PATH:/home/$USER/.local/bin
+huggingface-cli login --token your_token
+'
+```
+
+The next step for HF setup is to copy your [Mixtral config](https://huggingface.co/mistralai/Mixtral-8x7B-v0.1) into the TPU VM.
 ```
 gcloud compute tpus tpu-vm scp mixtral87.json $TPU_NAME:~/config.json --worker all --project $PROJECT --zone=$ZONE
 ```
@@ -124,3 +143,6 @@ python3 examples/pytorch/language-modeling/run_clm.py \
 *   `--static`: [bool] Enable baseline static approach. This produces much worse performance than gmm. Default: False.
 *   `--gmm_stack`: [bool] Enable a debug mode gmm. This produces much worse performance than gmm. Default: False.
 *   `--per_device_train_batch_size`: [int] Specify the global batch size. GSPMD treats the program as a singel device program.
+
+## How to measure the step time?
+A profile will be captured in `/tmp/home/`. Just use TensorBoard to open the profile and measure the step time from the "Trace View."
