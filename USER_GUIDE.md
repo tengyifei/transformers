@@ -26,9 +26,8 @@ gcloud alpha compute tpus tpu-vm ssh ${TPU_NAME} \
 --worker=all \
 --command='
 # Step 1: install torch, torch-xla, libtpu, pallas
-pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
-pip3 install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly-cp310-cp310-linux_x86_64.whl
-pip3 install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
+pip install --pre torch==2.5.0.dev20240825+cpu -f https://download.pytorch.org/whl/nightly/torch
+pip install 'torch_xla[tpu] @ https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-2.5.0.dev20240825-cp310-cp310-linux_x86_64.whl' -f https://storage.googleapis.com/libtpu-releases/index.html
 pip3 install torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
 
 # Step 2: install HF
@@ -91,6 +90,9 @@ export PROFILE_EPOCH=0
 export PROFILE_STEP=3
 export PROFILE_DURATION_MS=20000
 export PROFILE_LOGDIR=/tmp/home/
+
+# Unset LD_PRELOAD to use the default malloc instead of tcmalloc
+unset LD_PRELOAD
 
 # Run
 cd transformers
