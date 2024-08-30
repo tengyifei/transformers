@@ -1439,14 +1439,16 @@ class MixtralModel(MixtralPreTrainedModel):
                     past_key_values = DynamicCache.from_legacy_cache(past_key_values)
                 past_key_values_length = past_key_values.get_usable_length(seq_length)
 
-            if position_ids is None:
-                device = input_ids.device if input_ids is not None else inputs_embeds.device
-                position_ids = torch.arange(
-                    past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
-                )
-                position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-            else:
-                position_ids = position_ids.view(-1, seq_length).long()
+            with xp.Trace("MixtralModel.forward.3.1"):
+                print("position_ids is None:", position_ids is None)
+                if position_ids is None:
+                    device = input_ids.device if input_ids is not None else inputs_embeds.device
+                    position_ids = torch.arange(
+                        past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+                    )
+                    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+                else:
+                    position_ids = position_ids.view(-1, seq_length).long()
 
         with xp.Trace("MixtralModel.forward.4"):
             if inputs_embeds is None:
