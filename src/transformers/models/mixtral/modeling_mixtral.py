@@ -1443,23 +1443,25 @@ class MixtralModel(MixtralPreTrainedModel):
                 print("position_ids is None:", position_ids is None)
                 if position_ids is None:
                     device = input_ids.device if input_ids is not None else inputs_embeds.device
-                    with xp.Trace("MixtralModel.forward.3.1.1"):
+                    with xp.Trace("torch.arange"):
                         print("past_key_values_length", past_key_values_length)
                         position_ids = torch.arange(
                             past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
                         )
-                    with xp.Trace("MixtralModel.forward.3.1.2"):
+                    with xp.Trace("unsqueeze"):
                         print(position_ids.shape)
-                        position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+                        position_ids = position_ids.unsqueeze(0)
                         print(position_ids.shape)
                 else:
                     position_ids = position_ids.view(-1, seq_length).long()
 
         with xp.Trace("MixtralModel.forward.4"):
             if inputs_embeds is None:
-                inputs_embeds = self.embed_tokens(input_ids)
+                with xp.Trace("embed_tokens"):
+                    inputs_embeds = self.embed_tokens(input_ids)
 
             if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
+                print("MixtralModel.forward.4.2")
                 is_padding_right = attention_mask[:, -1].sum().item() != batch_size
                 if is_padding_right:
                     raise ValueError(
@@ -1482,6 +1484,8 @@ class MixtralModel(MixtralPreTrainedModel):
                     sliding_window=self.config.sliding_window,
                 )
             else:
+                print("MixtralModel.forward.4.3")
+                pass
                 # 4d mask is passed through the layers
                 attention_mask = _prepare_4d_causal_attention_mask(
                     attention_mask,
@@ -1495,13 +1499,15 @@ class MixtralModel(MixtralPreTrainedModel):
             hidden_states = inputs_embeds
 
             # decoder layers
-            all_hidden_states = () if output_hidden_states else None
-            all_self_attns = () if output_attentions else None
-            all_router_logits = () if output_router_logits else None
-            next_decoder_cache = None
+            with xp.Trace("MixtralModel.forward.5.1"):
+                all_hidden_states = () if output_hidden_states else None
+                all_self_attns = () if output_attentions else None
+                all_router_logits = () if output_router_logits else None
+                next_decoder_cache = None
 
             for decoder_layer in self.layers:
                 if output_hidden_states:
+                    print("MixtralModel.forward.5.1")
                     all_hidden_states += (hidden_states,)
 
                 if self.gradient_checkpointing and self.training:
@@ -1516,6 +1522,7 @@ class MixtralModel(MixtralPreTrainedModel):
                         use_cache,
                     )
                 else:
+                    print("MixtralModel.forward.5.2")
                     layer_outputs = decoder_layer(
                         hidden_states,
                         attention_mask=attention_mask,
