@@ -1460,55 +1460,52 @@ class MixtralModel(MixtralPreTrainedModel):
                 with xp.Trace("embed_tokens"):
                     inputs_embeds = self.embed_tokens(input_ids)
 
-            if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
-                print("MixtralModel.forward.4.2")
-                is_padding_right = attention_mask[:, -1].sum().item() != batch_size
-                if is_padding_right:
-                    raise ValueError(
-                        "You are attempting to perform batched generation with padding_side='right'"
-                        " this may lead to unexpected behaviour for Flash Attention version of Mixtral. Make sure to "
-                        " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-                    )
+            # if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
+            #     print("MixtralModel.forward.4.2")
+            #     is_padding_right = attention_mask[:, -1].sum().item() != batch_size
+            #     if is_padding_right:
+            #         raise ValueError(
+            #             "You are attempting to perform batched generation with padding_side='right'"
+            #             " this may lead to unexpected behaviour for Flash Attention version of Mixtral. Make sure to "
+            #             " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
+            #         )
 
-            if self._attn_implementation == "flash_attention_2":
-                # 2d mask is passed through the layers
-                attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-            elif self._attn_implementation == "sdpa" and not output_attentions:
-                # output_attentions=True can not be supported when using SDPA, and we fall back on
-                # the manual implementation that requires a 4D causal mask in all cases.
-                attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
-                    attention_mask,
-                    (batch_size, seq_length),
-                    inputs_embeds,
-                    past_key_values_length,
-                    sliding_window=self.config.sliding_window,
-                )
-            else:
-                print("MixtralModel.forward.4.3")
-                pass
-                # 4d mask is passed through the layers
-                attention_mask = _prepare_4d_causal_attention_mask(
-                    attention_mask,
-                    (batch_size, seq_length),
-                    inputs_embeds,
-                    past_key_values_length,
-                    sliding_window=self.config.sliding_window,
-                )
+            # if self._attn_implementation == "flash_attention_2":
+            #     # 2d mask is passed through the layers
+            #     attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
+            # elif self._attn_implementation == "sdpa" and not output_attentions:
+            #     # output_attentions=True can not be supported when using SDPA, and we fall back on
+            #     # the manual implementation that requires a 4D causal mask in all cases.
+            #     attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+            #         attention_mask,
+            #         (batch_size, seq_length),
+            #         inputs_embeds,
+            #         past_key_values_length,
+            #         sliding_window=self.config.sliding_window,
+            #     )
+            # else:
+            #     print("MixtralModel.forward.4.3")
+            #     # 4d mask is passed through the layers
+            #     attention_mask = _prepare_4d_causal_attention_mask(
+            #         attention_mask,
+            #         (batch_size, seq_length),
+            #         inputs_embeds,
+            #         past_key_values_length,
+            #         sliding_window=self.config.sliding_window,
+            #     )
 
         with xp.Trace("MixtralModel.forward.5"):
             hidden_states = inputs_embeds
 
             # decoder layers
-            with xp.Trace("MixtralModel.forward.5.1"):
-                all_hidden_states = () if output_hidden_states else None
-                all_self_attns = () if output_attentions else None
-                all_router_logits = () if output_router_logits else None
-                next_decoder_cache = None
+            all_hidden_states = () if output_hidden_states else None
+            all_self_attns = () if output_attentions else None
+            all_router_logits = () if output_router_logits else None
+            next_decoder_cache = None
 
             for decoder_layer in self.layers:
-                if output_hidden_states:
-                    print("MixtralModel.forward.5.1")
-                    all_hidden_states += (hidden_states,)
+                # if output_hidden_states:
+                #     all_hidden_states += (hidden_states,)
 
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
@@ -1522,16 +1519,16 @@ class MixtralModel(MixtralPreTrainedModel):
                         use_cache,
                     )
                 else:
-                    print("MixtralModel.forward.5.2")
-                    layer_outputs = decoder_layer(
-                        hidden_states,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        past_key_value=past_key_values,
-                        output_attentions=output_attentions,
-                        output_router_logits=output_router_logits,
-                        use_cache=use_cache,
-                    )
+                    with xp.Trace("MixtralModel.forward.5.1"):
+                        layer_outputs = decoder_layer(
+                            hidden_states,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            past_key_value=past_key_values,
+                            output_attentions=output_attentions,
+                            output_router_logits=output_router_logits,
+                            use_cache=use_cache,
+                        )
 
             hidden_states = layer_outputs[0]
 
