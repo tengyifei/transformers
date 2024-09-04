@@ -752,6 +752,7 @@ class LlamaPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
 
+
 LLAMA_INPUTS_DOCSTRING = r"""
     Args:
         input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
@@ -861,6 +862,13 @@ class LlamaModel(LlamaPreTrainedModel):
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
+        
+    def log_once(self, message):
+        if not hasattr(self, "logged_messages"):
+            self.logged_messages = set()
+        if message not in self.logged_messages:
+            print(message)
+            self.logged_messages.add(message)
 
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
     def forward(
@@ -933,10 +941,9 @@ class LlamaModel(LlamaPreTrainedModel):
 
         # Condition for `apply_layers`
         import torch_xla
-        if input_ids.device == torch_xla.device() \
-            and not self.gradient_checkpointing and self.training and not self.unroll_decoders \
+        if input_ids.device == torch_xla.device() and not self.unroll_decoders \
                 and not use_cache and not output_attentions and not output_hidden_states:
-            print("Using apply_layers to speed up compilation")
+            self.log_once("NOTE: Using apply_layers to speed up compilation")
             
             from torch_xla.experimental.apply_layers import apply_layers
             
@@ -963,7 +970,7 @@ class LlamaModel(LlamaPreTrainedModel):
             curried_layers = [ CurriedLayer(l) for l in self.layers ]
             hidden_states = apply_layers(curried_layers, hidden_states)
         else:
-            print("Using for loop to run decoder layers")
+            self.log_once("NOTE: Using for loop to run decoder layers")
 
             for decoder_layer in self.layers:
                 if output_hidden_states:
