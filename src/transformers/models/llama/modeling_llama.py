@@ -851,6 +851,7 @@ class LlamaModel(LlamaPreTrainedModel):
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
+        self.unroll_decoders = config.unroll_decoders
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -930,42 +931,76 @@ class LlamaModel(LlamaPreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = None
 
-        for decoder_layer in self.layers:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+        # Condition for `apply_layers`
+        import torch_xla
+        if input_ids.device == torch_xla.device() \
+            and not self.gradient_checkpointing and self.training and not self.unroll_decoders \
+                and not use_cache and not output_attentions and not output_hidden_states:
+            print("Using apply_layers to speed up compilation")
+            
+            from torch_xla.experimental.apply_layers import apply_layers
+            
+            class CurriedLayer(torch.nn.Module):
+                def __init__(self, decoder_layer):
+                    super().__init__()
+                    self.decoder_layer = decoder_layer
 
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    causal_mask,
-                    position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
-                    cache_position,
-                    position_embeddings,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                    position_embeddings=position_embeddings,
-                    **flash_attn_kwargs,
-                )
+                def forward(self, hidden_states):
+                    layer_outputs = self.decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_values,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        cache_position=cache_position,
+                        position_embeddings=position_embeddings,
+                        **flash_attn_kwargs,
+                    )
+                    hidden_states = layer_outputs[0]
+                    return hidden_states
 
-            hidden_states = layer_outputs[0]
+            curried_layers = [ CurriedLayer(l) for l in self.layers ]
+            hidden_states = apply_layers(curried_layers, hidden_states)
+        else:
+            print("Using for loop to run decoder layers")
 
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+            for decoder_layer in self.layers:
+                if output_hidden_states:
+                    all_hidden_states += (hidden_states,)
 
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
+                if self.gradient_checkpointing and self.training:
+                    layer_outputs = self._gradient_checkpointing_func(
+                        decoder_layer.__call__,
+                        hidden_states,
+                        causal_mask,
+                        position_ids,
+                        past_key_values,
+                        output_attentions,
+                        use_cache,
+                        cache_position,
+                        position_embeddings,
+                    )
+                else:
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_values,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        cache_position=cache_position,
+                        position_embeddings=position_embeddings,
+                        **flash_attn_kwargs,
+                    )
+
+                hidden_states = layer_outputs[0]
+
+                if use_cache:
+                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+
+                if output_attentions:
+                    all_self_attns += (layer_outputs[1],)
 
         hidden_states = self.norm(hidden_states)
 
