@@ -950,7 +950,7 @@ class LlamaModel(LlamaPreTrainedModel):
             self.log_once("NOTE: Using apply_layers to speed up compilation")
 
             from torch_xla.experimental.apply_layers import apply_layers
-            
+
             class CurriedLayer(torch.nn.Module):
                 def __init__(self, decoder_layer):
                     super().__init__()
