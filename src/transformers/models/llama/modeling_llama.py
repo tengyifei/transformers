@@ -945,11 +945,10 @@ class LlamaModel(LlamaPreTrainedModel):
             assert self.attention_dropout == 0, \
                 "Dropout is only supported when decoder layers are unrolled"
 
-        import torch_xla
-        if input_ids.device == torch_xla.device() and not self.unroll_decoders \
-                and not use_cache and not output_attentions and not output_hidden_states:
+        if not self.unroll_decoders and not use_cache and \
+            not output_attentions and not output_hidden_states:
             self.log_once("NOTE: Using apply_layers to speed up compilation")
-            
+
             from torch_xla.experimental.apply_layers import apply_layers
             
             class CurriedLayer(torch.nn.Module):
