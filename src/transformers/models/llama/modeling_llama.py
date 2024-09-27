@@ -853,6 +853,7 @@ class LlamaModel(LlamaPreTrainedModel):
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
         self.unroll_decoders = config.unroll_decoders
+        self.attention_dropout = config.attention_dropout
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -940,6 +941,10 @@ class LlamaModel(LlamaPreTrainedModel):
         next_decoder_cache = None
 
         # Condition for `apply_layers`
+        if not self.unroll_decoders:
+            assert self.attention_dropout == 0, \
+                "Dropout is only supported when decoder layers are unrolled"
+
         import torch_xla
         if input_ids.device == torch_xla.device() and not self.unroll_decoders \
                 and not use_cache and not output_attentions and not output_hidden_states:
