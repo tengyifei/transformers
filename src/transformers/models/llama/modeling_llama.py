@@ -940,16 +940,16 @@ class LlamaModel(LlamaPreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = None
 
-        # Condition for `apply_layers`
+        # Condition for `scan_layers`
         if not self.unroll_decoders:
             assert self.attention_dropout == 0, \
                 "Dropout is only supported when decoder layers are unrolled"
 
         if not self.unroll_decoders and not use_cache and \
             not output_attentions and not output_hidden_states:
-            self.log_once("NOTE: Using apply_layers to speed up compilation")
+            self.log_once("NOTE: Using scan_layers to speed up compilation")
 
-            from torch_xla.experimental.apply_layers import apply_layers
+            from torch_xla.experimental.scan_layers import scan_layers
 
             # We thread `position_embeddings` and `causal_mask` through the layers because
             # AOTAutograd can't trace free variable accesses.
@@ -977,7 +977,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     return hidden_states
 
             curried_layers = [ CurriedLayer(l, position_embeddings, causal_mask) for l in self.layers ]
-            hidden_states = apply_layers(curried_layers, hidden_states)
+            hidden_states = scan_layers(curried_layers, hidden_states)
         else:
             self.log_once("NOTE: Using for loop to run decoder layers")
 
